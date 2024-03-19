@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <link rel="apple-touch-icon" sizes="180x180" href="imgs/favicon/512x512.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="imgs/favicon/32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="imgs/favicon/16x16.png">
+    <link rel="manifest" href="site.webmanifest">
+    <link rel="mask-icon" href="imgs/favicon/safari-pinned-tab.svg" color="#5bbad5">
+    <meta name="msapplication-TileColor" content="#da532c">
+    <meta name="theme-color" content="#ffffff">
+    <title>Take Me There | URL Shortener powered by Google Apps Script</title>
+
+    <!-- Start Single Page Apps for GitHub Pages -->
+    <script type="text/javascript">
+        // Single Page Apps for GitHub Pages
+        // https://github.com/rafrex/spa-github-pages
+        // Copyright (c) 2016 Rafael Pedicini, licensed under the MIT License
+        // ----------------------------------------------------------------------
+        // This script checks to see if a redirect is present in the query string
+        // and converts it back into the correct url and adds it to the
+        // browser's history using window.history.replaceState(...),
+        // which won't cause the browser to attempt to load the new url.
+        // When the single page app is loaded further down in this file,
+        // the correct url will be waiting in the browser's history for
+        // the single page app to route accordingly.
+        (function(l) {
+            if (l.search) {
+                var q = {};
+                l.search.slice(1).split('&').forEach(function(v) {
+                    var a = v.split('=');
+                    q[a[0]] = a.slice(1).join('=').replace(/~and~/g, '&');
+                });
+                if (q.p !== undefined) {
+                    window.history.replaceState(null, null,
+                        l.pathname.slice(0, -1) + (q.p || '') +
+                        (q.q ? ('?' + q.q) : '') +
+                        l.hash
+                    );
+                }
+            }
+        }(window.location))
+    </script>
+    <!-- End Single Page Apps for GitHub Pages -->
+    <script>
+        var pathName = window.location.pathname;
+        if (pathName == "/") {} else {
+            pathInfo = pathName.replace("/","");
+            var newURL = "https://script.google.com/macros/s/AKfycbymAAf8ZRPpeSEmDreu87LbEHERS_4NmKE63CFqn0QZfJbbp24/exec?" + pathInfo;
+            window.open(newURL, '_top');
+        }
+    </script>
+
+    <style>
+        .gas-frame {
+            border: none;
+            border-width: 0;
+            padding: 0;
+            margin: 0;
+            height: 100%;
+            width: 100%;
+        }
+        
+        iframe {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 100%;
+            width: 100%;
+        }
+    </style>
+
+</head>
+
+<body>
+    <iframe class="gas-frame" src="https://script.google.com/macros/s/AKfycbymAAf8ZRPpeSEmDreu87LbEHERS_4NmKE63CFqn0QZfJbbp24/exec"></iframe>
+<script>
+    // Check compatibility for the browser we're running this in
+if ("serviceWorker" in navigator) {
+  if (navigator.serviceWorker.controller) {
+    // Optionally log to console "Service Worker found no need to register."
+  } else {
+    // Register the service worker
+    navigator.serviceWorker
+      .register("sw.js", {
+        scope: "./"
+      })
+      .then(function (reg) {
+        // Optionally log to console "Service worker registered."
+      });
+  }
+}
+    </script>
+</body>
+
+</html>
