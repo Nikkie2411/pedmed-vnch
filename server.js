@@ -5,6 +5,7 @@ const path = require('path');
 
 const app = express();
 app.use(cors()); // Cho phép kết nối từ frontend
+app.use(express.json()); // Hỗ trợ parse JSON body
 
 // Đường dẫn chính xác tới file Excel
 const FILE_PATH = path.join(__dirname, 'PedMed2025.xlsx');
@@ -23,9 +24,8 @@ app.get('/api/drugs', (req, res) => {
 });
 
 // API kiểm tra đăng nhập
-app.get('/api/login', (req, res) => {
-  const username = req.query.username;
-  const password = req.query.password;
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
 
   try {
     const workbook = xlsx.readFile(FILE_PATH);
@@ -50,7 +50,7 @@ app.get('/api/login', (req, res) => {
 });
 
 // Chạy server
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server đang chạy tại http://localhost:${PORT}`);
 });
