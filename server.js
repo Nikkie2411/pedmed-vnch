@@ -24,7 +24,7 @@ const sheets = google.sheets({ version: 'v4', auth });
 // API lấy dữ liệu từ Google Sheets
 app.get('/api/drugs', async (req, res) => {
   try {
-    const range = 'Sheet1'; // Tên sheet chứa dữ liệu
+    const range = 'pedmedvnch'; // Tên sheet chứa dữ liệu
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range,
