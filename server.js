@@ -36,14 +36,7 @@ app.get('/api/drugs', async (req, res) => {
     }
 
     const headers = rows[0];
-    const data = rows.slice(1).map(row => {
-      const item = {};
-      headers.forEach((header, index) => {
-        item[header] = row[index] || '';
-      });
-      return item;
-    });
-
+    const data = rows.map(row => row); // Trả về mảng con từ Google Sheets
     res.json(data);
   } catch (error) {
     console.error('Lỗi khi lấy dữ liệu từ Google Sheets:', error);
