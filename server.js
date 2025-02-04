@@ -16,7 +16,7 @@ const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
 // Khởi tạo Google Sheets API client
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
-  scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
 const sheets = google.sheets({ version: 'v4', auth });
@@ -85,7 +85,7 @@ app.post('/api/login', async (req, res) => {
     if (user[approvedIndex]?.trim() !== "Đã duyệt") {
       return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
-    
+
   } catch (error) {
     console.error('Lỗi khi kiểm tra tài khoản:', error);
     res.status(500).send('Lỗi máy chủ.');
