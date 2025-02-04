@@ -71,7 +71,6 @@ app.post('/api/login', async (req, res) => {
 
     const accounts = rows.slice(1);
     const user = accounts.find(row => {
-      const [sheetUsername, sheetPassword] = row;
       return (
         sheetUsername?.trim() === username?.trim() &&
         sheetPassword?.trim() === password?.trim()
