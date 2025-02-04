@@ -60,6 +60,15 @@ app.post('/api/login', async (req, res) => {
       return res.status(404).send('Không có dữ liệu tài khoản.');
     }
 
+    const headers = rows[0]; // Lấy hàng tiêu đề
+    const usernameIndex = headers.indexOf("Username");
+    const passwordIndex = headers.indexOf("Password");
+    const approvedIndex = headers.indexOf("Approved");
+
+    if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1) {
+      return res.status(500).send('Lỗi cấu trúc dữ liệu trong Google Sheets.');
+    }
+
     const accounts = rows.slice(1);
     const user = accounts.find(row => {
       const [sheetUsername, sheetPassword] = row;
@@ -69,14 +78,43 @@ app.post('/api/login', async (req, res) => {
       );
     });
 
-    if (user) {
-      res.json({ success: true });
-    } else {
-      res.json({ success: false, message: "Sai tài khoản hoặc mật khẩu!" });
+    if (!user) {
+      return res.json({ success: false, message: "Sai tài khoản hoặc mật khẩu!" });
     }
+
+    if (user[approvedIndex]?.trim() !== "Đã duyệt") {
+      return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
+    }
+    
   } catch (error) {
     console.error('Lỗi khi kiểm tra tài khoản:', error);
     res.status(500).send('Lỗi máy chủ.');
+  }
+});
+
+//API đăng ký user
+app.post('/api/register', async (req, res) => {
+  const { username, password, fullname, email, phone } = req.body;
+
+  if (!username || !password || !fullname || !email || !phone) {
+    return res.status(400).json({ success: false, message: "Vui lòng điền đầy đủ thông tin!" });
+  }
+
+  try {
+    const range = 'Accounts'; // Sheet chứa tài khoản
+    const newUser = [[username, password, fullname, email, phone, "Chưa duyệt"]];
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range,
+      valueInputOption: "USER_ENTERED",
+      resource: { values: newUser }
+    });
+
+    res.json({ success: true, message: "Đăng ký thành công! Chờ quản trị viên phê duyệt." });
+  } catch (error) {
+    console.error("Lỗi khi đăng ký tài khoản:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
 
