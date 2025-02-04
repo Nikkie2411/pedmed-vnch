@@ -15,7 +15,7 @@ const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
 
 // Khởi tạo Google Sheets API client
 const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+  keyFile: path.join(__dirname, 'vietanhprojects-a9f573862a83.json'),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
