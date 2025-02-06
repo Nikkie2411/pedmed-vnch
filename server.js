@@ -7,17 +7,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Đường dẫn đến file JSON chứa thông tin đăng nhập
-const SERVICE_ACCOUNT_FILE = path.join(__dirname, 'vietanhprojects-a9f573862a83.json');
-
 // ID của Google Sheet
 const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
 
 // Khởi tạo Google Sheets API client
 const auth = new google.auth.GoogleAuth({
-  keyFile: SERVICE_ACCOUNT_FILE,
+  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
+
 
 async function getSheetsClient() {
   const authClient = await auth.getClient();
@@ -117,6 +115,7 @@ app.post('/api/register', async (req, res) => {
   }
 
   try {
+    const sheets = await getSheetsClient();
     const range = 'Accounts'; // Sheet chứa tài khoản
     const newUser = [[username, password, fullname, email, phone, "Chưa duyệt"]];
 
