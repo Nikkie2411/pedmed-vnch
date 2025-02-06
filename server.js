@@ -15,11 +15,14 @@ const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
 
 // Khởi tạo Google Sheets API client
 const auth = new google.auth.GoogleAuth({
-  keyFile: path.join(__dirname, 'vietanhprojects-a9f573862a83.json'),
+  keyFile: SERVICE_ACCOUNT_FILE,
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-const sheets = google.sheets({ version: 'v4', auth });
+async function getSheetsClient() {
+  const authClient = await auth.getClient();
+  return google.sheets({ version: 'v4', auth: authClient });
+}
 
 // API lấy dữ liệu từ Google Sheets
 app.get('/api/drugs', async (req, res) => {
@@ -49,6 +52,7 @@ app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
 
   try {
+    const sheets = await getSheetsClient();
     const range = 'Accounts'; // Tên sheet chứa tài khoản
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
@@ -76,10 +80,10 @@ app.post('/api/login', async (req, res) => {
     }
 
     const accounts = rows.slice(1);
-    const user = accounts.find(row => {
+    const user = accounts.find(row =>
       row[usernameIndex]?.trim() === username?.trim() &&
       row[passwordIndex]?.trim() === password?.trim()
-    });
+    );
 
     if (!user) {
       console.log("Tài khoản hoặc mật khẩu không đúng.");
