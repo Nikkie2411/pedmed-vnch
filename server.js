@@ -111,10 +111,12 @@ app.post('/api/check-session', async (req, res) => {
   const { username } = req.body;
 
   if (!username) {
+    console.log("Lỗi: Không có tên đăng nhập");
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
   }
 
   try {
+    console.log("Kiểm tra trạng thái tài khoản của:", username);
     const sheets = await getSheetsClient();
     const range = 'Accounts'; 
     const response = await sheets.spreadsheets.values.get({
@@ -124,6 +126,7 @@ app.post('/api/check-session', async (req, res) => {
 
     const rows = response.data.values;
     if (!rows || rows.length === 0) {
+      console.log("Không tìm thấy tài khoản trong Google Sheets");
       return res.json({ success: false, message: "Không tìm thấy tài khoản!" });
     }
 
@@ -132,6 +135,7 @@ app.post('/api/check-session', async (req, res) => {
     const approvedIndex = headers.indexOf("Approved");
 
     if (usernameIndex === -1 || approvedIndex === -1) {
+      console.log("Lỗi: Không tìm thấy cột Username hoặc Approved");
       return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
     }
 
@@ -139,10 +143,14 @@ app.post('/api/check-session', async (req, res) => {
     const user = accounts.find(row => row[usernameIndex]?.trim() === username.trim());
 
     if (!user) {
+      console.log("Tài khoản không tồn tại!");
       return res.json({ success: false, message: "Tài khoản không tồn tại!" });
     }
 
+    console.log(`Trạng thái tài khoản: ${user[approvedIndex]}`);
+
     if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
+      console.log("Tài khoản bị hủy duyệt, cần đăng xuất!");
       return res.json({ success: false, message: "Tài khoản đã bị hủy duyệt!" });
     }
 
