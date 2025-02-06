@@ -50,6 +50,7 @@ app.get('/api/drugs', async (req, res) => {
 // API kiểm tra đăng nhập
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
+  console.log("Yêu cầu đăng nhập:", { username, password }); // Debug
 
   try {
     const sheets = await getSheetsClient();
@@ -58,6 +59,8 @@ app.post('/api/login', async (req, res) => {
       spreadsheetId: SPREADSHEET_ID,
       range,
     });
+
+    console.log("Dữ liệu từ Google Sheets:", response.data.values); // Debug
 
     if (!response || !response.data || !response.data.values) {
       console.error("Không lấy được dữ liệu từ Google Sheets!");
@@ -91,9 +94,9 @@ app.post('/api/login', async (req, res) => {
     }
 
     // In trạng thái phê duyệt ra console để debug
-    console.log(`Tài khoản: ${username} - Trạng thái: ${user[approvedIndex]}`);
+    console.log(`Tài khoản: ${username} - Trạng thái: ${user[approvedIndex]}`); // Debug
 
-    if (user[approvedIndex]?.trim().toLowerCase() !== "Đã duyệt") {
+    if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
       console.log("Tài khoản chưa được duyệt.");
       return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
