@@ -55,6 +55,11 @@ app.post('/api/login', async (req, res) => {
       range,
     });
 
+    if (!response || !response.data || !response.data.values) {
+      console.error("Không lấy được dữ liệu từ Google Sheets!");
+      return res.status(500).json({ success: false, message: "Lỗi lấy dữ liệu tài khoản!" });
+    }
+
     const rows = response.data.values;
     if (!rows || rows.length === 0) {
       return res.status(404).send('Không có dữ liệu tài khoản.');
@@ -66,25 +71,30 @@ app.post('/api/login', async (req, res) => {
     const approvedIndex = headers.indexOf("Approved");
 
     if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1) {
+      console.error("Cột dữ liệu không tồn tại trong Google Sheets.");
       return res.status(500).send('Lỗi cấu trúc dữ liệu trong Google Sheets.');
     }
 
     const accounts = rows.slice(1);
     const user = accounts.find(row => {
-      return (
-        sheetUsername?.trim() === username?.trim() &&
-        sheetPassword?.trim() === password?.trim()
-      );
+      row[usernameIndex]?.trim() === username?.trim() &&
+      row[passwordIndex]?.trim() === password?.trim()
     });
 
     if (!user) {
+      console.log("Tài khoản hoặc mật khẩu không đúng.");
       return res.json({ success: false, message: "Sai tài khoản hoặc mật khẩu!" });
     }
 
-    if (user[approvedIndex]?.trim() !== "Đã duyệt") {
+    // In trạng thái phê duyệt ra console để debug
+    console.log(`Tài khoản: ${username} - Trạng thái: ${user[approvedIndex]}`);
+
+    if (user[approvedIndex]?.trim().toLowerCase() !== "Đã duyệt") {
+      console.log("Tài khoản chưa được duyệt.");
       return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
 
+    res.json({ success: true });
   } catch (error) {
     console.error('Lỗi khi kiểm tra tài khoản:', error);
     res.status(500).send('Lỗi máy chủ.');
