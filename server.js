@@ -83,10 +83,10 @@ app.post('/api/login', async (req, res) => {
     }
 
     const accounts = rows.slice(1);
-    const user = accounts.find(row =>
-      row[usernameIndex]?.trim() === username?.trim() &&
-      row[passwordIndex]?.trim() === password?.trim()
-    );
+    const user = accounts.find(row => {
+      return row[usernameIndex]?.trim() === username?.trim() &&
+              row[passwordIndex]?.trim() === password?.trim()
+    });
 
     if (!user) {
       console.log("Tài khoản hoặc mật khẩu không đúng.");
@@ -103,8 +103,8 @@ app.post('/api/login', async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    console.error('Lỗi khi kiểm tra tài khoản:', error);
-    res.status(500).send('Lỗi máy chủ.');
+    console.error('Lỗi khi kiểm tra tài khoản:', error.response ? error.response.data : error.message);
+    res.status(500).json({ success: false, message: error.message || "Lỗi máy chủ!" });
   }
 });
 
