@@ -27,6 +27,7 @@ async function getSheetsClient() {
 // API lấy dữ liệu từ Google Sheets
 app.get('/api/drugs', async (req, res) => {
   try {
+    const sheets = await getSheetsClient();
     const range = 'pedmedvnch'; // Tên sheet chứa dữ liệu
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
@@ -38,7 +39,6 @@ app.get('/api/drugs', async (req, res) => {
       return res.status(404).send('Không có dữ liệu trong Google Sheet.');
     }
 
-    const headers = rows[0];
     const data = rows.map(row => row); // Trả về mảng con từ Google Sheets
     res.json(data);
   } catch (error) {
