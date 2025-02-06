@@ -106,6 +106,55 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+//API kiểm tra trạng thái đã duyệt
+app.post('/api/check-session', async (req, res) => {
+  const { username } = req.body;
+
+  if (!username) {
+    return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
+  }
+
+  try {
+    const sheets = await getSheetsClient();
+    const range = 'Accounts'; 
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range,
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length === 0) {
+      return res.json({ success: false, message: "Không tìm thấy tài khoản!" });
+    }
+
+    const headers = rows[0];
+    const usernameIndex = headers.indexOf("Username");
+    const approvedIndex = headers.indexOf("Approved");
+
+    if (usernameIndex === -1 || approvedIndex === -1) {
+      return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+    }
+
+    const accounts = rows.slice(1);
+    const user = accounts.find(row => row[usernameIndex]?.trim() === username.trim());
+
+    if (!user) {
+      return res.json({ success: false, message: "Tài khoản không tồn tại!" });
+    }
+
+    if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
+      return res.json({ success: false, message: "Tài khoản đã bị hủy duyệt!" });
+    }
+
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error("Lỗi khi kiểm tra trạng thái tài khoản:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+  }
+});
+
+
 //API kiểm tra tên đăng nhập
 app.post('/api/check-username', async (req, res) => {
   const { username } = req.body;
