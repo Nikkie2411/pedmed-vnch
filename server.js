@@ -212,25 +212,54 @@ app.post('/api/register', async (req, res) => {
   const { username, password, fullname, email, phone } = req.body;
 
   if (!username || !password || !fullname || !email || !phone) {
-    return res.status(400).json({ success: false, message: "Vui lòng điền đầy đủ thông tin!" });
+      return res.status(400).json({ success: false, message: "Vui lòng điền đầy đủ thông tin!" });
   }
 
   try {
-    const sheets = await getSheetsClient();
-    const range = 'Accounts'; // Sheet chứa tài khoản
-    const newUser = [[username, password, fullname, email, phone, "Chưa duyệt"]];
+      const sheets = await getSheetsClient();
+      const range = 'Accounts';
+      
+      // 🔹 Kiểm tra xem username đã tồn tại chưa
+      const response = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range,
+      });
 
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range,
-      valueInputOption: "USER_ENTERED",
-      resource: { values: newUser }
-    });
+      const rows = response.data.values;
+      if (!rows || rows.length === 0) {
+          return res.status(500).json({ success: false, message: "Lỗi dữ liệu Google Sheets!" });
+      }
 
-    res.json({ success: true, message: "Đăng ký thành công! Chờ quản trị viên phê duyệt." });
+      const headers = rows[0];
+      const usernameIndex = headers.indexOf("Username");
+
+      if (usernameIndex === -1) {
+          return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+      }
+
+      const accounts = rows.slice(1);
+      const isTaken = accounts.some(row => row[usernameIndex]?.trim() === username.trim());
+
+      if (isTaken) {
+          return res.json({ success: false, message: "Tên đăng nhập không hợp lệ!" });
+      }
+
+      // 🔹 Thêm cột Date (ngày đăng ký)
+      const today = new Date().toISOString().split("T")[0]; // Lấy ngày hiện tại YYYY-MM-DD
+      const newUser = [[username, password, fullname, email, phone, "Chưa duyệt", today]];
+
+      await sheets.spreadsheets.values.append({
+          spreadsheetId: SPREADSHEET_ID,
+          range,
+          valueInputOption: "USER_ENTERED",
+          resource: { values: newUser }
+      });
+
+      res.json({ success: true, message: "Đăng ký thành công! Chờ quản trị viên phê duyệt." });
+
   } catch (error) {
-    console.error("Lỗi khi đăng ký tài khoản:", error);
-    res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+      console.error("Lỗi khi đăng ký tài khoản:", error);
+      res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
 
