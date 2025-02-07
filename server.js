@@ -149,7 +149,7 @@ app.post('/api/check-session', async (req, res) => {
 
     console.log(`Trạng thái tài khoản: ${user[approvedIndex]}`);
 
-    if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
+    if (!user[approvedIndex] || user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
       console.log("Tài khoản bị hủy duyệt, cần đăng xuất!");
       return res.json({ success: false, message: "Tài khoản đã bị hủy duyệt!" });
     }
