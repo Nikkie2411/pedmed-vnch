@@ -241,9 +241,10 @@ app.post('/api/register', async (req, res) => {
 
       const headers = rows[0];
       const usernameIndex = headers.indexOf("Username");
+      const emailIndex = headers.indexOf("Email");
 
-      if (usernameIndex === -1) {
-          return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+      if (usernameIndex === -1 || emailIndex === -1) {
+        return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
       }
 
       const accounts = rows.slice(1);
@@ -252,6 +253,10 @@ app.post('/api/register', async (req, res) => {
 
       if (isTaken) {
           return res.json({ success: false, message: "Tên đăng nhập không hợp lệ!" });
+      }
+
+      if (isEmailTaken) {
+        return res.json({ success: false, message: "Email đã được sử dụng!" });
       }
 
       // 🔹 Thêm cột Date (ngày đăng ký)
