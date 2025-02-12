@@ -193,7 +193,8 @@ app.post('/api/check-username', async (req, res) => {
       const accounts = rows.slice(1);
       const isUsernameTaken = accounts.some(row => row[usernameIndex]?.trim() === username.trim());
 
-      res.json({ exists: isUsernameTaken });
+      return res.json({ exists: isUsernameTaken });
+      
   } catch (error) {
       console.error("❌ Lỗi khi kiểm tra username:", error);
       res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
