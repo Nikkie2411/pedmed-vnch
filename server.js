@@ -178,28 +178,29 @@ app.post('/api/check-username', async (req, res) => {
           range,
       });
 
-      const rows = response.data.values;
-      if (!rows || rows.length === 0) {
-          return res.status(500).json({ exists: false, message: "Lỗi dữ liệu Google Sheets!" });
+      if (!response || !response.data || !response.data.values) {
+          return res.status(500).json({ exists: false, message: "Lỗi khi lấy dữ liệu từ Google Sheets!" });
       }
 
-      const headers = rows[0];
+      const rows = response.data.values;
+      const headers = rows[0] || [];
       const usernameIndex = headers.indexOf("Username");
 
       if (usernameIndex === -1) {
-          return res.status(500).json({ exists: false, message: "Lỗi cấu trúc Google Sheets!" });
+          return res.status(500).json({ exists: false, message: "Không tìm thấy cột Username!" });
       }
 
       const accounts = rows.slice(1);
       const isUsernameTaken = accounts.some(row => row[usernameIndex]?.trim() === username.trim());
 
       return res.json({ exists: isUsernameTaken });
-      
+
   } catch (error) {
       console.error("❌ Lỗi khi kiểm tra username:", error);
-      res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
+      return res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
   }
 });
+
 
 // Hàm kiểm tra định dạng email hợp lệ
 function isValidEmail(email) {
