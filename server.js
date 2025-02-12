@@ -206,6 +206,11 @@ app.post('/api/check-username', async (req, res) => {
   }
 });
 
+// Hàm kiểm tra định dạng email hợp lệ
+function isValidEmail(email) {
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailPattern.test(email);
+}
 
 //API đăng ký user
 app.post('/api/register', async (req, res) => {
@@ -213,6 +218,10 @@ app.post('/api/register', async (req, res) => {
 
   if (!username || !password || !fullname || !email || !phone) {
       return res.status(400).json({ success: false, message: "Vui lòng điền đầy đủ thông tin!" });
+  }
+
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ success: false, message: "Email không hợp lệ!" });
   }
 
   try {
@@ -239,6 +248,7 @@ app.post('/api/register', async (req, res) => {
 
       const accounts = rows.slice(1);
       const isTaken = accounts.some(row => row[usernameIndex]?.trim() === username.trim());
+      const isEmailTaken = accounts.some(row => row[emailIndex]?.trim() === email.trim());
 
       if (isTaken) {
           return res.json({ success: false, message: "Tên đăng nhập không hợp lệ!" });
