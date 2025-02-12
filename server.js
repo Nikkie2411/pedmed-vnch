@@ -165,44 +165,38 @@ app.post('/api/check-session', async (req, res) => {
 
 //API kiểm tra tên đăng nhập
 app.post('/api/check-username', async (req, res) => {
-  const { username } = req.body;
-
-  if (!username) {
-    return res.status(400).json({ success: false, message: "Vui lòng nhập tên đăng nhập!" });
-  }
-
   try {
-    const sheets = await getSheetsClient();
-    const range = 'Accounts'; // Sheet chứa tài khoản
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range,
-    });
+      const { username } = req.body;
+      if (!username) {
+          return res.status(400).json({ exists: false, message: "Thiếu tên đăng nhập!" });
+      }
 
-    const rows = response.data.values;
-    if (!rows || rows.length === 0) {
-      return res.json({ success: true, message: "Tên đăng nhập hợp lệ!" });
-    }
+      const sheets = await getSheetsClient();
+      const range = 'Accounts';
+      const response = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range,
+      });
 
-    const headers = rows[0];
-    const usernameIndex = headers.indexOf("Username");
+      const rows = response.data.values;
+      if (!rows || rows.length === 0) {
+          return res.status(500).json({ exists: false, message: "Lỗi dữ liệu Google Sheets!" });
+      }
 
-    if (usernameIndex === -1) {
-      return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
-    }
+      const headers = rows[0];
+      const usernameIndex = headers.indexOf("Username");
 
-    const accounts = rows.slice(1);
-    const isTaken = accounts.some(row => row[usernameIndex]?.trim() === username.trim());
+      if (usernameIndex === -1) {
+          return res.status(500).json({ exists: false, message: "Lỗi cấu trúc Google Sheets!" });
+      }
 
-    if (isTaken) {
-      return res.json({ success: false, message: "Tên đăng nhập đã tồn tại!" });
-    }
+      const accounts = rows.slice(1);
+      const isUsernameTaken = accounts.some(row => row[usernameIndex]?.trim() === username.trim());
 
-    res.json({ success: true, message: "Tên đăng nhập hợp lệ!" });
-
+      res.json({ exists: isUsernameTaken });
   } catch (error) {
-    console.error("Lỗi khi kiểm tra tên đăng nhập:", error);
-    res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+      console.error("❌ Lỗi khi kiểm tra username:", error);
+      res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
   }
 });
 
