@@ -255,7 +255,7 @@ app.post('/api/register', async (req, res) => {
           resource: { values: newUser }
       });
 
-      res.json({ success: true, message: "Đăng ký thành công! Chờ quản trị viên phê duyệt." });
+      res.json({ success: true, message: "Đăng ký thành công! Thông báo phê duyệt tài khoản thành công sẽ được gửi tới email của bạn (có thể cần kiểm tra trong mục Spam)." });
 
   } catch (error) {
       console.error("Lỗi khi đăng ký tài khoản:", error);
