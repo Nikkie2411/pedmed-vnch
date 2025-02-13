@@ -162,42 +162,58 @@ app.post('/api/check-session', async (req, res) => {
 });
 
 //API kiểm tra tên đăng nhập
+let cachedUsernames = [];
+
+async function loadUsernames() {
+    try {
+        const sheets = await getSheetsClient();
+        const range = 'Accounts';
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range,
+        });
+
+        if (!response || !response.data || !response.data.values) {
+            console.error("⚠️ Không thể tải danh sách username.");
+            return;
+        }
+
+        const rows = response.data.values;
+        const headers = rows[0] || [];
+        const usernameIndex = headers.indexOf("Username");
+
+        if (usernameIndex === -1) {
+            console.error("⚠️ Không tìm thấy cột Username.");
+            return;
+        }
+
+        cachedUsernames = rows.slice(1).map(row => row[usernameIndex]?.trim().toLowerCase());
+        console.log("✅ Tải danh sách username thành công.");
+    } catch (error) {
+        console.error("❌ Lỗi khi tải danh sách username:", error);
+    }
+}
+
+// Tải danh sách username khi server khởi động
+loadUsernames();
+
+// API kiểm tra username
 app.post('/api/check-username', async (req, res) => {
-  try {
-      const { username } = req.body;
-      if (!username) {
-          return res.status(400).json({ exists: false, message: "Thiếu tên đăng nhập!" });
-      }
+    try {
+        const { username } = req.body;
+        if (!username) {
+            return res.status(400).json({ exists: false, message: "Thiếu tên đăng nhập!" });
+        }
 
-      const sheets = await getSheetsClient();
-      const range = 'Accounts';
-      const response = await sheets.spreadsheets.values.get({
-          spreadsheetId: SPREADSHEET_ID,
-          range,
-      });
+        const isUsernameTaken = cachedUsernames.includes(username.trim().toLowerCase());
 
-      if (!response || !response.data || !response.data.values) {
-          return res.status(500).json({ exists: false, message: "Lỗi khi lấy dữ liệu từ Google Sheets!" });
-      }
-
-      const rows = response.data.values;
-      const headers = rows[0] || [];
-      const usernameIndex = headers.indexOf("Username");
-
-      if (usernameIndex === -1) {
-          return res.status(500).json({ exists: false, message: "Không tìm thấy cột Username!" });
-      }
-
-      const accounts = rows.slice(1);
-      const isUsernameTaken = accounts.some(row => row[usernameIndex]?.trim() === username.trim());
-
-      return res.json({ exists: isUsernameTaken });
-
-  } catch (error) {
-      console.error("❌ Lỗi khi kiểm tra username:", error);
-      return res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
-  }
+        return res.json({ exists: isUsernameTaken });
+    } catch (error) {
+        console.error("❌ Lỗi khi kiểm tra username:", error);
+        return res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
+    }
 });
+
 
 // Hàm kiểm tra định dạng email hợp lệ
 function isValidEmail(email) {
