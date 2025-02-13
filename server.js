@@ -16,7 +16,6 @@ const auth = new google.auth.GoogleAuth({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-
 async function getSheetsClient() {
   const authClient = await auth.getClient();
   return google.sheets({ version: 'v4', auth: authClient });
@@ -162,12 +161,10 @@ app.post('/api/check-session', async (req, res) => {
   }
 });
 
-
 //API kiểm tra tên đăng nhập
 app.post('/api/check-username', async (req, res) => {
   try {
       const { username } = req.body;
-      console.log("Đang kiểm tra username:", username); // Debug
       if (!username) {
           return res.status(400).json({ exists: false, message: "Thiếu tên đăng nhập!" });
       }
@@ -178,8 +175,6 @@ app.post('/api/check-username', async (req, res) => {
           spreadsheetId: SPREADSHEET_ID,
           range,
       });
-
-      console.log("Dữ liệu từ Google Sheets:", response.data.values); // Debug
 
       if (!response || !response.data || !response.data.values) {
           return res.status(500).json({ exists: false, message: "Lỗi khi lấy dữ liệu từ Google Sheets!" });
@@ -203,7 +198,6 @@ app.post('/api/check-username', async (req, res) => {
       return res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
   }
 });
-
 
 // Hàm kiểm tra định dạng email hợp lệ
 function isValidEmail(email) {
