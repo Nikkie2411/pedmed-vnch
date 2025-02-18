@@ -7,6 +7,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const os = require("os");
+const { v4: uuidv4 } = require("uuid");
+
 // ID của Google Sheet
 const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
 
@@ -46,7 +49,7 @@ app.get('/api/drugs', async (req, res) => {
 
 // API kiểm tra đăng nhập
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, deviceId } = req.body;
   console.log("Yêu cầu đăng nhập:", { username, password }); // Debug
 
   try {
@@ -73,8 +76,10 @@ app.post('/api/login', async (req, res) => {
     const usernameIndex = headers.indexOf("Username");
     const passwordIndex = headers.indexOf("Password");
     const approvedIndex = headers.indexOf("Approved");
+    const device1Index = headers.indexOf("Device_1");
+    const device2Index = headers.indexOf("Device_2");
 
-    if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1) {
+    if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1 || device1Index === -1 || device2Index === -1) {
       console.error("Cột dữ liệu không tồn tại trong Google Sheets.");
       return res.status(500).send('Lỗi cấu trúc dữ liệu trong Google Sheets.');
     }
@@ -87,7 +92,7 @@ app.post('/api/login', async (req, res) => {
 
     if (!user) {
       console.log("Tài khoản hoặc mật khẩu không đúng.");
-      return res.json({ success: false, message: "Sai tài khoản hoặc mật khẩu!" });
+      return res.json({ success: false, message: "Tài khoản hoặc mật khẩu không đúng!" });
     }
 
     // In trạng thái phê duyệt ra console để debug
@@ -97,6 +102,27 @@ app.post('/api/login', async (req, res) => {
       console.log("Tài khoản chưa được duyệt.");
       return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
+
+    const currentDevices = [userRow[device1Index], userRow[device2Index]].filter(Boolean);
+
+    if (currentDevices.includes(deviceId)) {
+        return res.json({ success: true, message: "Đăng nhập thành công!" });
+    }
+
+    if (currentDevices.length >= 2) {
+        return res.json({ success: false, message: "Tài khoản đã đăng nhập trên 2 thiết bị. Hãy đăng xuất 1 thiết bị trước!" });
+    }
+
+    // Cập nhật Google Sheets để lưu thiết bị mới
+    const newDevices = [...currentDevices, deviceId].slice(-2);
+    const userRowIndex = rows.findIndex(row => row[usernameIndex] === username) + 1;
+
+    await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `Accounts!D${userRowIndex}:E${userRowIndex}`,
+        valueInputOption: "RAW",
+        resource: { values: [newDevices] }
+    });
 
     res.json({ success: true });
   } catch (error) {
@@ -161,6 +187,47 @@ app.post('/api/check-session', async (req, res) => {
   }
 });
 
+app.post('/api/logout-device', async (req, res) => {
+  const { username, deviceId } = req.body;
+
+  try {
+      const sheets = await getSheetsClient();
+      const range = 'Accounts';
+      const response = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range,
+      });
+
+      const rows = response.data.values;
+      const headers = rows[0];
+      const usernameIndex = headers.indexOf("Username");
+      const device1Index = headers.indexOf("Device_1");
+      const device2Index = headers.indexOf("Device_2");
+
+      const userRowIndex = rows.findIndex(row => row[usernameIndex] === username) + 1;
+      let currentDevices = [rows[userRowIndex][device1Index], rows[userRowIndex][device2Index]].filter(Boolean);
+
+      if (!currentDevices.includes(deviceId)) {
+          return res.json({ success: false, message: "Thiết bị này không đăng nhập vào tài khoản này!" });
+      }
+
+      currentDevices = currentDevices.filter(id => id !== deviceId);
+
+      await sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `Accounts!D${userRowIndex}:E${userRowIndex}`,
+          valueInputOption: "RAW",
+          resource: { values: [currentDevices] }
+      });
+
+      return res.json({ success: true, message: "Đã đăng xuất thiết bị thành công!" });
+
+  } catch (error) {
+      console.error('Lỗi khi đăng xuất thiết bị:', error);
+      return res.status(500).send('Lỗi máy chủ.');
+  }
+});
+
 //API kiểm tra tên đăng nhập
 let cachedUsernames = [];
 
@@ -213,7 +280,6 @@ app.post('/api/check-username', async (req, res) => {
         return res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
     }
 });
-
 
 // Hàm kiểm tra định dạng email hợp lệ
 function isValidEmail(email) {
