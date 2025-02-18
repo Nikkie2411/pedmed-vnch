@@ -47,6 +47,9 @@ app.get('/api/drugs', async (req, res) => {
   }
 });
 
+console.log("Headers:", headers); // Kiểm tra tiêu đề cột
+console.log("Index Device_1:", device1Index, "Index Device_2:", device2Index);
+
 // API kiểm tra đăng nhập
 app.post('/api/login', async (req, res) => {
   const { username, password, deviceId } = req.body;
@@ -117,12 +120,12 @@ app.post('/api/login', async (req, res) => {
     const newDevices = [...currentDevices, deviceId].slice(-2);
     const userRowIndex = rows.findIndex(row => row[usernameIndex] === username) + 1;
 
-    console.log(`📌 Cập nhật thiết bị cho user: ${username} tại hàng ${userRowIndex + 1}`);
+    console.log(`📌 Cập nhật thiết bị cho user: ${username} tại hàng ${userRowIndex}`);
     console.log(`📌 Thiết bị mới: ${newDevices}`);
 
     await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: `Accounts!${String.fromCharCode(65 + device1Index)}${userRowIndex + 1}:${String.fromCharCode(65 + device2Index)}${userRowIndex + 1}`,
+        range: `Accounts!${String.fromCharCode(65 + device1Index)}${userRowIndex}:${String.fromCharCode(65 + device2Index)}${userRowIndex}`,
         valueInputOption: "RAW",
         resource: { values: [newDevices] }
     });
