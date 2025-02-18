@@ -117,9 +117,12 @@ app.post('/api/login', async (req, res) => {
     const newDevices = [...currentDevices, deviceId].slice(-2);
     const userRowIndex = rows.findIndex(row => row[usernameIndex] === username) + 1;
 
+    console.log(`📌 Cập nhật thiết bị cho user: ${username} tại hàng ${userRowIndex + 1}`);
+    console.log(`📌 Thiết bị mới: ${newDevices}`);
+
     await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: `Accounts!D${userRowIndex}:E${userRowIndex}`,
+        range: `Accounts!${String.fromCharCode(65 + device1Index)}${userRowIndex + 1}:${String.fromCharCode(65 + device2Index)}${userRowIndex + 1}`,
         valueInputOption: "RAW",
         resource: { values: [newDevices] }
     });
