@@ -103,7 +103,7 @@ app.post('/api/login', async (req, res) => {
       return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
 
-    const currentDevices = [userRow[device1Index], userRow[device2Index]].filter(Boolean);
+    const currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
 
     if (currentDevices.includes(deviceId)) {
         return res.json({ success: true, message: "Đăng nhập thành công!" });
