@@ -52,6 +52,9 @@ app.post('/api/login', async (req, res) => {
   const { username, password, deviceId } = req.body;
   console.log("Yêu cầu đăng nhập:", { username, password }); // Debug
 
+  // 🛠️ Debug: Kiểm tra giá trị deviceId được nhận từ frontend
+  console.log(`📌 Nhận request login - Username: ${username}, DeviceID: ${deviceId}`);
+
   try {
     const sheets = await getSheetsClient();
     const range = 'Accounts'; // Tên sheet chứa tài khoản
@@ -126,7 +129,7 @@ app.post('/api/login', async (req, res) => {
 
     await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: `Accounts!${String.fromCharCode(65 + device1Index)}${userRowIndex}:${String.fromCharCode(65 + device2Index)}${userRowIndex}`,
+        range: `Accounts!I${userRowIndex}:J${userRowIndex}`,
         valueInputOption: "RAW",
         resource: { values: [newDevices] }
     });
