@@ -47,9 +47,6 @@ app.get('/api/drugs', async (req, res) => {
   }
 });
 
-console.log("Headers:", headers); // Kiểm tra tiêu đề cột
-console.log("Index Device_1:", device1Index, "Index Device_2:", device2Index);
-
 // API kiểm tra đăng nhập
 app.post('/api/login', async (req, res) => {
   const { username, password, deviceId } = req.body;
@@ -81,6 +78,10 @@ app.post('/api/login', async (req, res) => {
     const approvedIndex = headers.indexOf("Approved");
     const device1Index = headers.indexOf("Device_1");
     const device2Index = headers.indexOf("Device_2");
+
+    // Debugging: Kiểm tra nếu headers không có dữ liệu
+    console.log("📌 Headers:", headers);
+    console.log(`📌 Username Index: ${usernameIndex}, Device_1 Index: ${device1Index}, Device_2 Index: ${device2Index}`);
 
     if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1 || device1Index === -1 || device2Index === -1) {
       console.error("Cột dữ liệu không tồn tại trong Google Sheets.");
