@@ -225,7 +225,7 @@ app.post('/api/logout-device', async (req, res) => {
 
       await sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
-          range: `Accounts!D${userRowIndex}:E${userRowIndex}`,
+          range: `Accounts!I${userRowIndex}:J${userRowIndex}`,
           valueInputOption: "RAW",
           resource: { values: [currentDevices] }
       });
