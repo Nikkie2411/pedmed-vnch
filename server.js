@@ -183,9 +183,13 @@ app.post('/api/check-session', async (req, res) => {
 });
 
 app.post('/api/logout-device', async (req, res) => {
-  const { username, deviceId, newDeviceId } = req.body;
-
   try {
+      const { username, deviceId, newDeviceId } = req.body;
+
+      if (!username || !deviceId || !newDeviceId) {
+          return res.status(400).json({ success: false, message: "Thiếu thông tin cần thiết" });
+      }
+
       const sheets = await getSheetsClient();
       const range = 'Accounts';
       const response = await sheets.spreadsheets.values.get({
@@ -199,28 +203,31 @@ app.post('/api/logout-device', async (req, res) => {
       const device1Index = headers.indexOf("Device_1");
       const device2Index = headers.indexOf("Device_2");
 
-      const userRowIndex = rows.findIndex(row => row[usernameIndex] === username) + 1;
-      let devices = [rows[userRowIndex - 1][device1Index], rows[userRowIndex - 1][device2Index]].filter(Boolean);
+      const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
+      if (userRowIndex === -1) {
+          return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản" });
+      }
+
+      let devices = [rows[userRowIndex][device1Index], rows[userRowIndex][device2Index]].filter(Boolean);
 
       devices = devices.filter(id => id !== deviceId); // Xóa thiết bị đã chọn
-
-      // Thêm thiết bị mới vào danh sách
       devices.push(newDeviceId);
 
       await sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
-          range: `Accounts!I${userRowIndex}:J${userRowIndex}`,
+          range: `Accounts!I${userRowIndex + 1}:J${userRowIndex + 1}`,
           valueInputOption: "RAW",
           resource: { values: [devices] }
       });
 
       return res.json({ success: true, message: "Đăng xuất thành công!" });
 
-  } catch (error) {
+    } catch (error) {
       console.error('Lỗi khi đăng xuất thiết bị:', error);
-      return res.status(500).send('Lỗi máy chủ.');
+      return res.status(500).json({ success: false, message: "Lỗi máy chủ" });
     }
   });
+
 
 //API kiểm tra tên đăng nhập
 let cachedUsernames = [];
