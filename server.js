@@ -67,82 +67,63 @@ app.post('/api/login', async (req, res) => {
       range,
     });
 
-    console.log("Dữ liệu từ Google Sheets:", response.data.values); // Debug
-
-    if (!response || !response.data || !response.data.values) {
-      console.error("Không lấy được dữ liệu từ Google Sheets!");
-      return res.status(500).json({ success: false, message: "Lỗi lấy dữ liệu tài khoản!" });
-    }
-
     const rows = response.data.values;
     if (!rows || rows.length === 0) {
-      return res.status(404).send('Không có dữ liệu tài khoản.');
+        return res.status(404).send('Không có dữ liệu tài khoản.');
     }
 
-    const headers = rows[0]; // Lấy hàng tiêu đề
+    const headers = rows[0];
     const usernameIndex = headers.indexOf("Username");
     const passwordIndex = headers.indexOf("Password");
     const approvedIndex = headers.indexOf("Approved");
     const device1Index = headers.indexOf("Device_1");
     const device2Index = headers.indexOf("Device_2");
 
-    // Debugging: Kiểm tra nếu headers không có dữ liệu
-    console.log("📌 Headers:", headers);
-    console.log(`📌 Username Index: ${usernameIndex}, Device_1 Index: ${device1Index}, Device_2 Index: ${device2Index}`);
-
-    if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1 || device1Index === -1 || device2Index === -1) {
-      console.error("Cột dữ liệu không tồn tại trong Google Sheets.");
-      return res.status(500).send('Lỗi cấu trúc dữ liệu trong Google Sheets.');
+    const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
+    if (userRowIndex === -1) {
+        return res.json({ success: false, message: "Sai tài khoản hoặc mật khẩu!" });
     }
 
-    const accounts = rows.slice(1);
-    const user = accounts.find(row => {
-      return row[usernameIndex]?.trim() === username?.trim() &&
-              row[passwordIndex]?.trim() === password?.trim()
-    });
-
-    if (!user) {
-      console.log("Tài khoản hoặc mật khẩu không đúng.");
-      return res.json({ success: false, message: "Tài khoản hoặc mật khẩu không đúng!" });
-    }
-
-    // In trạng thái phê duyệt ra console để debug
-    console.log(`Tài khoản: ${username} - Trạng thái: ${user[approvedIndex]}`); // Debug
+    const user = rows[userRowIndex];
 
     if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
-      console.log("Tài khoản chưa được duyệt.");
-      return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
+        return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
 
-    const currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
+    let currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
+
+    console.log(`📌 Danh sách thiết bị hiện tại của ${username}: ${currentDevices}`);
 
     if (currentDevices.includes(deviceId)) {
         return res.json({ success: true, message: "Đăng nhập thành công!" });
     }
 
     if (currentDevices.length >= 2) {
-        return res.json({ success: false, message: "Tài khoản đã đăng nhập trên 2 thiết bị. Hãy đăng xuất 1 thiết bị trước!" });
+        return res.json({
+            success: false,
+            message: "Tài khoản đã đăng nhập trên 2 thiết bị. Vui lòng chọn thiết bị cần đăng xuất.",
+            devices: currentDevices
+        });
     }
 
-    // Cập nhật Google Sheets để lưu thiết bị mới
-    const newDevices = [...currentDevices, deviceId].slice(-2);
-    const userRowIndex = rows.findIndex(row => row[usernameIndex] === username) + 1;
+    currentDevices.push(deviceId);
+    currentDevices = currentDevices.slice(-2);
 
-    console.log(`📌 Cập nhật thiết bị cho user: ${username} tại hàng ${userRowIndex}`);
-    console.log(`📌 Thiết bị mới: ${newDevices}`);
+    console.log(`📌 Cập nhật thiết bị mới cho ${username}: ${currentDevices}`);
 
     await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: `Accounts!I${userRowIndex}:J${userRowIndex}`,
+        range: `Accounts!I${userRowIndex + 1}:J${userRowIndex + 1}`,
         valueInputOption: "RAW",
-        resource: { values: [newDevices] }
+        resource: { values: [currentDevices] }
     });
 
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Lỗi khi kiểm tra tài khoản:', error.response ? error.response.data : error.message);
-    res.status(500).json({ success: false, message: error.message || "Lỗi máy chủ!" });
-  }
+    return res.json({ success: true, message: "Đăng nhập thành công và thiết bị đã được lưu!" });
+
+} catch (error) {
+    console.error('Lỗi khi kiểm tra tài khoản:', error);
+    return res.status(500).send('Lỗi máy chủ.');
+}
 });
 
 //API kiểm tra trạng thái đã duyệt
