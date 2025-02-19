@@ -198,7 +198,7 @@ app.post('/api/check-session', async (req, res) => {
 });
 
 app.post('/api/logout-device', async (req, res) => {
-  const { username, deviceId } = req.body;
+  const { username, deviceId, newDeviceId } = req.body;
 
   try {
       const sheets = await getSheetsClient();
@@ -215,28 +215,27 @@ app.post('/api/logout-device', async (req, res) => {
       const device2Index = headers.indexOf("Device_2");
 
       const userRowIndex = rows.findIndex(row => row[usernameIndex] === username) + 1;
-      let currentDevices = [rows[userRowIndex][device1Index], rows[userRowIndex][device2Index]].filter(Boolean);
+      let devices = [rows[userRowIndex - 1][device1Index], rows[userRowIndex - 1][device2Index]].filter(Boolean);
 
-      if (!currentDevices.includes(deviceId)) {
-          return res.json({ success: false, message: "Thiết bị này không đăng nhập vào tài khoản này!" });
-      }
+      devices = devices.filter(id => id !== deviceId); // Xóa thiết bị đã chọn
 
-      currentDevices = currentDevices.filter(id => id !== deviceId);
+      // Thêm thiết bị mới vào danh sách
+      devices.push(newDeviceId);
 
       await sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
           range: `Accounts!I${userRowIndex}:J${userRowIndex}`,
           valueInputOption: "RAW",
-          resource: { values: [currentDevices] }
+          resource: { values: [devices] }
       });
 
-      return res.json({ success: true, message: "Đã đăng xuất thiết bị thành công!" });
+      return res.json({ success: true, message: "Đăng xuất thành công!" });
 
   } catch (error) {
       console.error('Lỗi khi đăng xuất thiết bị:', error);
       return res.status(500).send('Lỗi máy chủ.');
-  }
-});
+    }
+  });
 
 //API kiểm tra tên đăng nhập
 let cachedUsernames = [];
