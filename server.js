@@ -4,7 +4,11 @@ const { google } = require('googleapis');
 const path = require('path');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "https://pedmed-vnch.web.app", // Chỉ cho phép từ frontend này
+  methods: "GET,POST,PUT,DELETE",
+  allowedHeaders: "Content-Type,Authorization"
+}));
 app.use(express.json());
 
 const os = require("os");
