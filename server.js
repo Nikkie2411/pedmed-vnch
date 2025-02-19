@@ -128,15 +128,15 @@ app.post('/api/login', async (req, res) => {
 
 //API kiểm tra trạng thái đã duyệt
 app.post('/api/check-session', async (req, res) => {
-  const { username } = req.body;
+  const { username, deviceId } = req.body;
 
-  if (!username) {
-    console.log("Lỗi: Không có tên đăng nhập");
-    return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
+  if (!username || !deviceId) {
+    console.log("Lỗi: Không có tên đăng nhập hoặc Device ID");
+    return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản hoặc thiết bị!" });
   }
 
   try {
-    console.log("Kiểm tra trạng thái tài khoản của:", username);
+    console.log(`📌 Kiểm tra trạng thái tài khoản của: ${username}, DeviceID: ${deviceId}`);
     const sheets = await getSheetsClient();
     const range = 'Accounts'; 
     const response = await sheets.spreadsheets.values.get({
@@ -153,9 +153,11 @@ app.post('/api/check-session', async (req, res) => {
     const headers = rows[0];
     const usernameIndex = headers.indexOf("Username");
     const approvedIndex = headers.indexOf("Approved");
+    const device1Index = headers.indexOf("Device_1");
+    const device2Index = headers.indexOf("Device_2");
 
-    if (usernameIndex === -1 || approvedIndex === -1) {
-      console.log("Lỗi: Không tìm thấy cột Username hoặc Approved");
+    if (usernameIndex === -1 || approvedIndex === -1 || device1Index === -1 || device2Index === -1) {
+      console.log("Lỗi: Không tìm thấy cột Username, Approved hoặc Device");
       return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
     }
 
@@ -167,17 +169,26 @@ app.post('/api/check-session', async (req, res) => {
       return res.json({ success: false, message: "Tài khoản không tồn tại!" });
     }
 
-    console.log(`Trạng thái tài khoản: ${user[approvedIndex]}`);
+    console.log(`📌 Trạng thái tài khoản: ${user[approvedIndex]}`);
 
     if (!user[approvedIndex] || user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
-      console.log("Tài khoản bị hủy duyệt, cần đăng xuất!");
+      console.log("⚠️ Tài khoản bị hủy duyệt, cần đăng xuất!");
       return res.json({ success: false, message: "Tài khoản đã bị hủy duyệt!" });
+    }
+
+    // Kiểm tra xem thiết bị còn hợp lệ không
+    const currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
+    console.log(`📌 Danh sách thiết bị hợp lệ: ${currentDevices}`);
+
+    if (!currentDevices.includes(deviceId)) {
+      console.log("⚠️ Thiết bị không còn hợp lệ, cần đăng xuất!");
+      return res.json({ success: false, message: "Thiết bị của bạn đã bị đăng xuất!" });
     }
 
     res.json({ success: true });
 
   } catch (error) {
-    console.error("Lỗi khi kiểm tra trạng thái tài khoản:", error);
+    console.error("❌ Lỗi khi kiểm tra trạng thái tài khoản:", error);
     res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
