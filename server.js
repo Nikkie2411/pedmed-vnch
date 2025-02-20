@@ -85,7 +85,7 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
         const rawEmail = [
             "MIME-Version: 1.0",
             "Content-Type: text/html; charset=UTF-8",
-            `From: PedMed VNCH <pedmedvn.nch@gmail.com>`,
+            `From: PedMedVN <pedmedvn.nch@gmail.com>`,
             `To: <${toEmail}>`,
             `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
             "",
