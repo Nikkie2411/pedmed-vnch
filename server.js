@@ -529,10 +529,12 @@ app.post('/api/send-otp', async (req, res) => {
 
       // 🔹 Gửi email
       try {
-          sendEmailWithGmailAPI(userEmail, "Mã xác nhận đổi mật khẩu", `
-              <p>Xin chào ${username},</p>
-              <p>Mã xác nhận đổi mật khẩu của bạn là: <b>${otpCode}</b></p>
-              <p>Vui lòng nhập mã này vào trang web để tiếp tục đổi mật khẩu.</p>
+          sendEmailWithGmailAPI(userEmail, "PEDMEDVN: MÃ XÁC NHẬN ĐỔI MẬT KHẨU", `
+              <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
+              <p style="font-weight: bold">Mã xác nhận đổi mật khẩu của bạn là: 
+              <h3 style="font-weight: bold">${otpCode}</h3></p>
+              <p>Vui lòng nhập ngay mã này vào trang web để tiếp tục đổi mật khẩu.</p>
+              <p>Cảm ơn bạn đã sử dụng dịch vụ của chúng tôi!</p>
           `);
       } catch (emailError) {
           console.log("❌ Lỗi khi gửi email:", emailError);
@@ -548,21 +550,41 @@ app.post('/api/send-otp', async (req, res) => {
 });
 
 //API xác thực OTP
-app.post('/api/verify-otp', (req, res) => {
+app.post('/api/verify-otp', async (req, res) => {
   const { username, otp } = req.body;
 
+  console.log(`📌 Nhận yêu cầu xác minh OTP - Username: ${username}, OTP: ${otp}`);
+
   if (!username || !otp) {
-      return res.status(400).json({ success: false, message: "Thiếu thông tin xác nhận!" });
+      console.log("❌ Thiếu username hoặc OTP trong request!");
+      return res.status(400).json({ success: false, message: "Thiếu thông tin xác minh!" });
   }
 
-  const storedOtp = otpStore.get(username);
+  try {
+      // Kiểm tra OTP đã lưu
+      const savedOtp = otpStore.get(username);
+      console.log(`🔍 OTP lưu trong hệ thống: ${savedOtp}`);
 
-  if (!storedOtp || storedOtp !== parseInt(otp, 10)) {
-      return res.json({ success: false, message: "Mã xác nhận không đúng hoặc đã hết hạn!" });
+      if (!savedOtp) {
+          console.log("❌ OTP không hợp lệ hoặc đã hết hạn!");
+          return res.status(400).json({ success: false, message: "OTP không hợp lệ hoặc đã hết hạn!" });
+      }
+
+      if (savedOtp !== parseInt(otp)) {
+          console.log("❌ OTP nhập vào không khớp!");
+          return res.status(400).json({ success: false, message: "Mã OTP không đúng!" });
+      }
+
+      // Nếu OTP đúng, xóa OTP khỏi hệ thống
+      otpStore.delete(username);
+
+      console.log("✅ Xác minh OTP thành công!");
+      return res.json({ success: true, message: "Xác minh thành công, hãy đặt lại mật khẩu mới!" });
+
+  } catch (error) {
+      console.error("❌ Lỗi khi xác minh OTP:", error);
+      return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
-
-  otpStore.delete(username); // Xóa OTP sau khi dùng
-  res.json({ success: true, message: "Mã xác nhận hợp lệ!" });
 });
 
 //API cập nhật mật khẩu mới
