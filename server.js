@@ -25,34 +25,42 @@ async function getSheetsClient() {
 }
 
 async function getAccessToken() {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const refreshToken = scriptProperties.getProperty("REFRESH_TOKEN");
-  const clientId = scriptProperties.getProperty("CLIENT_ID");
-  const clientSecret = scriptProperties.getProperty("CLIENT_SECRET");
+  console.log("🔄 Đang lấy Access Token...");
+  
+  try {
+      const scriptProperties = PropertiesService.getScriptProperties();
+      const refreshToken = scriptProperties.getProperty("REFRESH_TOKEN");
+      const clientId = scriptProperties.getProperty("CLIENT_ID");
+      const clientSecret = scriptProperties.getProperty("CLIENT_SECRET");
 
-  console.log(`📌 Dùng Client ID: ${clientId}`);
+      console.log(`📌 Dùng Client ID: ${clientId}`);
 
-  const tokenUrl = "https://oauth2.googleapis.com/token";
-  const payload = new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token"
-  });
+      const tokenUrl = "https://oauth2.googleapis.com/token";
+      const payload = new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: refreshToken,
+          grant_type: "refresh_token"
+      });
 
-  const response = await fetch(tokenUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: payload
-  });
+      const response = await fetch(tokenUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: payload
+      });
 
-  const json = await response.json();
-  if (!response.ok) {
-      throw new Error(`Lỗi khi lấy Access Token: ${json.error}`);
+      const json = await response.json();
+      console.log("📌 Phản hồi từ Google khi lấy Access Token:", json);
+
+      if (!response.ok) {
+          throw new Error(`Lỗi khi lấy Access Token: ${json.error}`);
+      }
+
+      console.log("✅ Access Token lấy thành công!");
+      return json.access_token;
+  } catch (error) {
+      console.error("❌ Lỗi khi lấy Access Token:", error.message);
   }
-
-  console.log(`✅ Lấy được Access Token: ${json.access_token}`);
-  return json.access_token;
 }
 
 const fetch = require('node-fetch'); // Nếu bạn dùng node-fetch để gửi request
@@ -62,7 +70,13 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
     console.log(`📧 Chuẩn bị gửi email đến: ${toEmail}`);
 
     try {
+        console.log("🔄 Đang lấy Access Token...");
         const accessToken = await getAccessToken();
+        console.log(`✅ Lấy được Access Token: ${accessToken ? "Thành công" : "Không có Access Token"}`);
+
+        if (!accessToken) {
+            throw new Error("Không thể lấy Access Token!");
+        }
         const url = "https://www.googleapis.com/gmail/v1/users/me/messages/send";
 
         const rawEmail = [
@@ -80,21 +94,21 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
             .replace(/\+/g, '-')
             .replace(/\//g, '_')
             .replace(/=+$/, '');
-
-        const options = {
+        
+        console.log("📤 Gửi request tới Gmail API...");
+        const response = await fetch(url, {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${accessToken}`,
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({ raw: encodedMessage })
-        };
+        });
 
-        console.log("📤 Gửi request tới Gmail API...");
-        const response = await fetch(url, options);
         const result = await response.json();
 
         if (!response.ok) {
+            console.error("❌ Lỗi gửi email:", result);
             throw new Error(`Lỗi gửi email: ${result.error.message}`);
         }
 
