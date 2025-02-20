@@ -54,10 +54,7 @@ app.get('/api/drugs', async (req, res) => {
 // API kiểm tra đăng nhập
 app.post('/api/login', async (req, res) => {
   const { username, password, deviceId } = req.body;
-  console.log("Yêu cầu đăng nhập:", { username, password }); // Debug
-
-  // 🛠️ Debug: Kiểm tra giá trị deviceId được nhận từ frontend
-  console.log(`📌 Nhận request login - Username: ${username}, DeviceID: ${deviceId}`);
+  console.log("📌 Nhận yêu cầu đăng nhập:", { username, password, deviceId });
 
   try {
     const sheets = await getSheetsClient();
@@ -79,19 +76,31 @@ app.post('/api/login', async (req, res) => {
     const device1Index = headers.indexOf("Device_1");
     const device2Index = headers.indexOf("Device_2");
 
+    if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1) {
+      return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+    }
+
     const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
     if (userRowIndex === -1) {
-        return res.json({ success: false, message: "Sai tài khoản hoặc mật khẩu!" });
+      console.log("❌ Sai tài khoản hoặc mật khẩu!");
+      return res.json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
     }
 
     const user = rows[userRowIndex];
 
+    // 🔹 Kiểm tra mật khẩu
+    if (user[passwordIndex]?.trim() !== password.trim()) {
+      console.log("❌ Sai mật khẩu!");
+      return res.json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
+    }
+
+    // 🔹 Kiểm tra trạng thái "Đã duyệt"
     if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
-        return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
+      console.log("⚠️ Tài khoản chưa được phê duyệt!");
+      return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
 
     let currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
-
     console.log(`📌 Danh sách thiết bị hiện tại của ${username}: ${currentDevices}`);
 
     if (currentDevices.includes(deviceId)) {
