@@ -590,9 +590,11 @@ app.post('/api/verify-otp', async (req, res) => {
 //API cập nhật mật khẩu mới
 app.post('/api/reset-password', async (req, res) => {
   const { username, newPassword } = req.body;
+  console.log(`📌 Nhận yêu cầu đổi mật khẩu - Username: ${username}`);
 
   if (!username || !newPassword) {
-      return res.status(400).json({ success: false, message: "Thiếu thông tin mật khẩu!" });
+      console.log("❌ Thiếu thông tin đổi mật khẩu!");
+      return res.status(400).json({ success: false, message: "Vui lòng nhập đầy đủ thông tin!" });
   }
 
   try {
@@ -609,15 +611,26 @@ app.post('/api/reset-password', async (req, res) => {
       const passwordIndex = headers.indexOf("Password");
 
       if (usernameIndex === -1 || passwordIndex === -1) {
+          console.log("❌ Không tìm thấy cột Username hoặc Password!");
           return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
       }
 
       const userRowIndex = rows.findIndex(row => row[usernameIndex]?.trim() === username.trim());
 
       if (userRowIndex === -1) {
-          return res.json({ success: false, message: "Không tìm thấy tài khoản!" });
+          console.log("❌ Tài khoản không tồn tại!");
+          return res.status(404).json({ success: false, message: "Tài khoản không tồn tại!" });
       }
 
+      const oldPassword = rows[userRowIndex][passwordIndex];
+      console.log(`🔍 Mật khẩu cũ: ${oldPassword}`);
+
+      if (newPassword === oldPassword) {
+          console.log("❌ Mật khẩu mới không được trùng với mật khẩu cũ!");
+          return res.status(400).json({ success: false, message: "Mật khẩu mới không được giống mật khẩu cũ!" });
+      }
+
+      // Cập nhật mật khẩu mới vào Google Sheets
       await sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
           range: `Accounts!B${userRowIndex + 1}`, // Cột B chứa mật khẩu
@@ -625,11 +638,12 @@ app.post('/api/reset-password', async (req, res) => {
           resource: { values: [[newPassword]] }
       });
 
-      res.json({ success: true, message: "Mật khẩu đã được cập nhật thành công!" });
+      console.log("✅ Mật khẩu đã cập nhật thành công!");
+      return res.json({ success: true, message: "Đổi mật khẩu thành công! Hãy đăng nhập lại." });
 
   } catch (error) {
       console.error("❌ Lỗi khi cập nhật mật khẩu:", error);
-      res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+      return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
 
