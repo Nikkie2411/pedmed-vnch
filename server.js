@@ -365,6 +365,129 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
+const crypto = require("crypto");
+
+// Lưu OTP tạm thời (sẽ mất đi khi server restart)
+const otpStore = new Map(); 
+
+//API gửi OTP đến email user
+app.post('/api/send-otp', async (req, res) => {
+    const { username } = req.body;
+
+    if (!username) {
+        return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
+    }
+
+    try {
+        console.log(`📌 Gửi mã OTP cho: ${username}`);
+        const sheets = await getSheetsClient();
+        const range = 'Accounts';
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range,
+        });
+
+        const rows = response.data.values;
+        const headers = rows[0];
+        const usernameIndex = headers.indexOf("Username");
+        const emailIndex = headers.indexOf("Email");
+
+        if (usernameIndex === -1 || emailIndex === -1) {
+            return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+        }
+
+        const user = rows.find(row => row[usernameIndex]?.trim() === username.trim());
+
+        if (!user) {
+            return res.json({ success: false, message: "Không tìm thấy tài khoản!" });
+        }
+
+        const userEmail = user[emailIndex];
+        const otpCode = crypto.randomInt(100000, 999999); // Tạo OTP 6 chữ số
+        otpStore.set(username, otpCode); // Lưu OTP tạm thời
+
+        console.log(`📌 Mã OTP cho ${username}: ${otpCode}`);
+
+        // Gửi email OTP
+        sendEmailWithGmailAPI(userEmail, "Mã xác nhận đổi mật khẩu", `
+            <p>Xin chào ${username},</p>
+            <p>Mã xác nhận đổi mật khẩu của bạn là: <b>${otpCode}</b></p>
+            <p>Vui lòng nhập mã này vào trang web để tiếp tục đổi mật khẩu.</p>
+        `);
+
+        res.json({ success: true, message: "Mã xác nhận đã được gửi đến email của bạn!" });
+
+    } catch (error) {
+        console.error("❌ Lỗi khi gửi OTP:", error);
+        res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+    }
+});
+
+//API xác thực OTP
+app.post('/api/verify-otp', (req, res) => {
+  const { username, otp } = req.body;
+
+  if (!username || !otp) {
+      return res.status(400).json({ success: false, message: "Thiếu thông tin xác nhận!" });
+  }
+
+  const storedOtp = otpStore.get(username);
+
+  if (!storedOtp || storedOtp !== parseInt(otp, 10)) {
+      return res.json({ success: false, message: "Mã xác nhận không đúng hoặc đã hết hạn!" });
+  }
+
+  otpStore.delete(username); // Xóa OTP sau khi dùng
+  res.json({ success: true, message: "Mã xác nhận hợp lệ!" });
+});
+
+//API cập nhật mật khẩu mới
+app.post('/api/reset-password', async (req, res) => {
+  const { username, newPassword } = req.body;
+
+  if (!username || !newPassword) {
+      return res.status(400).json({ success: false, message: "Thiếu thông tin mật khẩu!" });
+  }
+
+  try {
+      const sheets = await getSheetsClient();
+      const range = 'Accounts';
+      const response = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range,
+      });
+
+      const rows = response.data.values;
+      const headers = rows[0];
+      const usernameIndex = headers.indexOf("Username");
+      const passwordIndex = headers.indexOf("Password");
+
+      if (usernameIndex === -1 || passwordIndex === -1) {
+          return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+      }
+
+      const userRowIndex = rows.findIndex(row => row[usernameIndex]?.trim() === username.trim());
+
+      if (userRowIndex === -1) {
+          return res.json({ success: false, message: "Không tìm thấy tài khoản!" });
+      }
+
+      await sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `Accounts!B${userRowIndex + 1}`, // Cột B chứa mật khẩu
+          valueInputOption: "RAW",
+          resource: { values: [[newPassword]] }
+      });
+
+      res.json({ success: true, message: "Mật khẩu đã được cập nhật thành công!" });
+
+  } catch (error) {
+      console.error("❌ Lỗi khi cập nhật mật khẩu:", error);
+      res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+  }
+});
+
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server đang chạy tại http://localhost:${PORT}`);
