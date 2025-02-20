@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const { google } = require('googleapis');
-const path = require('path');
 
 const app = express();
 app.use(cors({
@@ -10,9 +9,6 @@ app.use(cors({
   allowedHeaders: "Content-Type,Authorization"
 }));
 app.use(express.json());
-
-const os = require("os");
-const { v4: uuidv4 } = require("uuid");
 
 // ID của Google Sheet
 const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
@@ -26,6 +22,82 @@ const auth = new google.auth.GoogleAuth({
 async function getSheetsClient() {
   const authClient = await auth.getClient();
   return google.sheets({ version: 'v4', auth: authClient });
+}
+
+async function getAccessToken() {
+  const scriptProperties = PropertiesService.getScriptProperties();
+  const refreshToken = scriptProperties.getProperty("REFRESH_TOKEN");
+  const clientId = scriptProperties.getProperty("CLIENT_ID");
+  const clientSecret = scriptProperties.getProperty("CLIENT_SECRET");
+
+  const tokenUrl = "https://oauth2.googleapis.com/token";
+  const payload = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token"
+  });
+
+  const response = await fetch(tokenUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload
+  });
+
+  const json = await response.json();
+  if (!response.ok) {
+      throw new Error(`Lỗi khi lấy Access Token: ${json.error}`);
+  }
+
+  return json.access_token;
+}
+
+const fetch = require('node-fetch'); // Nếu bạn dùng node-fetch để gửi request
+
+// 📧 Hàm gửi email bằng Gmail API
+async function sendEmailWithGmailAPI(toEmail, subject, body) {
+    console.log(`📧 Chuẩn bị gửi email đến: ${toEmail}`);
+
+    try {
+        const accessToken = await getAccessToken();
+        const url = "https://www.googleapis.com/gmail/v1/users/me/messages/send";
+
+        const rawEmail = [
+            "MIME-Version: 1.0",
+            "Content-Type: text/html; charset=UTF-8",
+            `From: PedMed VNCH <pedmedvn.nch@gmail.com>`,
+            `To: <${toEmail}>`,
+            `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
+            "",
+            body
+        ].join("\r\n");
+
+        const encodedMessage = Buffer.from(rawEmail)
+            .toString('base64')
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+
+        const options = {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${accessToken}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ raw: encodedMessage })
+        };
+
+        const response = await fetch(url, options);
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(`Lỗi gửi email: ${result.error.message}`);
+        }
+
+        console.log("✅ Email đã gửi thành công:", result);
+    } catch (error) {
+        console.error("❌ Lỗi khi gửi email:", error.message);
+    }
 }
 
 // API lấy dữ liệu từ Google Sheets
