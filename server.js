@@ -383,8 +383,11 @@ const otpStore = new Map();
 app.post('/api/send-otp', async (req, res) => {
     const { username } = req.body;
 
+    console.log("📌 Nhận yêu cầu gửi mã OTP từ:", username); // Debug
+
     if (!username) {
-        return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
+      console.log("❌ Thiếu username trong request!");
+      return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
     }
 
     try {
