@@ -529,7 +529,7 @@ app.post('/api/send-otp', async (req, res) => {
 
       // 🔹 Gửi email
       try {
-          sendEmailWithGmailAPI(userEmail, "PEDMEDVN: MÃ XÁC NHẬN ĐỔI MẬT KHẨU", `
+          sendEmailWithGmailAPI(userEmail, "MÃ XÁC NHẬN ĐỔI MẬT KHẨU", `
               <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
               <p style="font-weight: bold">Mã xác nhận đổi mật khẩu của bạn là: 
               <h3 style="font-weight: bold">${otpCode}</h3></p>
