@@ -30,6 +30,8 @@ async function getAccessToken() {
   const clientId = scriptProperties.getProperty("CLIENT_ID");
   const clientSecret = scriptProperties.getProperty("CLIENT_SECRET");
 
+  console.log(`📌 Dùng Client ID: ${clientId}`);
+
   const tokenUrl = "https://oauth2.googleapis.com/token";
   const payload = new URLSearchParams({
       client_id: clientId,
@@ -49,6 +51,7 @@ async function getAccessToken() {
       throw new Error(`Lỗi khi lấy Access Token: ${json.error}`);
   }
 
+  console.log(`✅ Lấy được Access Token: ${json.access_token}`);
   return json.access_token;
 }
 
@@ -87,6 +90,7 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
             body: JSON.stringify({ raw: encodedMessage })
         };
 
+        console.log("📤 Gửi request tới Gmail API...");
         const response = await fetch(url, options);
         const result = await response.json();
 
@@ -319,7 +323,6 @@ app.post('/api/logout-device', async (req, res) => {
       return res.status(500).json({ success: false, message: "Lỗi máy chủ" });
     }
   });
-
 
 //API kiểm tra tên đăng nhập
 let cachedUsernames = [];
@@ -590,7 +593,6 @@ app.post('/api/reset-password', async (req, res) => {
       res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
-
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
