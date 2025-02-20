@@ -381,58 +381,78 @@ const otpStore = new Map();
 
 //API gửi OTP đến email user
 app.post('/api/send-otp', async (req, res) => {
-    const { username } = req.body;
+  const { username } = req.body;
 
-    console.log("📌 Nhận yêu cầu gửi mã OTP từ:", username); // Debug
+  console.log("📌 Nhận yêu cầu gửi OTP từ:", username);
 
-    if (!username) {
+  if (!username) {
       console.log("❌ Thiếu username trong request!");
       return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
-    }
+  }
 
-    try {
-        console.log(`📌 Gửi mã OTP cho: ${username}`);
-        const sheets = await getSheetsClient();
-        const range = 'Accounts';
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
-            range,
-        });
+  try {
+      console.log(`📌 Kiểm tra tài khoản: ${username}`);
+      const sheets = await getSheetsClient();
+      const range = 'Accounts';
+      const response = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range,
+      });
 
-        const rows = response.data.values;
-        const headers = rows[0];
-        const usernameIndex = headers.indexOf("Username");
-        const emailIndex = headers.indexOf("Email");
+      if (!response || !response.data || !response.data.values) {
+          console.log("❌ Không lấy được dữ liệu từ Google Sheets!");
+          return res.status(500).json({ success: false, message: "Lỗi lấy dữ liệu tài khoản!" });
+      }
 
-        if (usernameIndex === -1 || emailIndex === -1) {
-            return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
-        }
+      console.log("✅ Dữ liệu từ Google Sheets:", response.data.values);
 
-        const user = rows.find(row => row[usernameIndex]?.trim() === username.trim());
+      const rows = response.data.values;
+      const headers = rows[0];
+      const usernameIndex = headers.indexOf("Username");
+      const emailIndex = headers.indexOf("Email");
 
-        if (!user) {
-            return res.json({ success: false, message: "Không tìm thấy tài khoản!" });
-        }
+      if (usernameIndex === -1 || emailIndex === -1) {
+          console.log("❌ Không tìm thấy cột Username hoặc Email!");
+          return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+      }
 
-        const userEmail = user[emailIndex];
-        const otpCode = crypto.randomInt(100000, 999999); // Tạo OTP 6 chữ số
-        otpStore.set(username, otpCode); // Lưu OTP tạm thời
+      const user = rows.find(row => row[usernameIndex]?.trim() === username.trim());
 
-        console.log(`📌 Mã OTP cho ${username}: ${otpCode}`);
+      if (!user) {
+          console.log("❌ Không tìm thấy tài khoản!");
+          return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản!" });
+      }
 
-        // Gửi email OTP
-        sendEmailWithGmailAPI(userEmail, "Mã xác nhận đổi mật khẩu", `
-            <p>Xin chào ${username},</p>
-            <p>Mã xác nhận đổi mật khẩu của bạn là: <b>${otpCode}</b></p>
-            <p>Vui lòng nhập mã này vào trang web để tiếp tục đổi mật khẩu.</p>
-        `);
+      const userEmail = user[emailIndex];
+      if (!userEmail || !userEmail.includes("@")) {
+          console.log(`❌ Email không hợp lệ: ${userEmail}`);
+          return res.status(400).json({ success: false, message: "Email không hợp lệ!" });
+      }
 
-        res.json({ success: true, message: "Mã xác nhận đã được gửi đến email của bạn!" });
+      // 🔹 Tạo mã OTP 6 số ngẫu nhiên
+      const otpCode = Math.floor(100000 + Math.random() * 900000);
+      console.log(`📌 Mã OTP cho ${username}: ${otpCode}`);
 
-    } catch (error) {
-        console.error("❌ Lỗi khi gửi OTP:", error);
-        res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
-    }
+      otpStore.set(username, otpCode); // Lưu OTP tạm thời
+
+      // 🔹 Gửi email
+      try {
+          sendEmailWithGmailAPI(userEmail, "Mã xác nhận đổi mật khẩu", `
+              <p>Xin chào ${username},</p>
+              <p>Mã xác nhận đổi mật khẩu của bạn là: <b>${otpCode}</b></p>
+              <p>Vui lòng nhập mã này vào trang web để tiếp tục đổi mật khẩu.</p>
+          `);
+      } catch (emailError) {
+          console.log("❌ Lỗi khi gửi email:", emailError);
+          return res.status(500).json({ success: false, message: "Lỗi khi gửi email!" });
+      }
+
+      return res.json({ success: true, message: "Mã xác nhận đã được gửi đến email của bạn!" });
+
+  } catch (error) {
+      console.error("❌ Lỗi máy chủ khi gửi OTP:", error);
+      return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+  }
 });
 
 //API xác thực OTP
