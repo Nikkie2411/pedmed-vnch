@@ -26,12 +26,15 @@ async function getSheetsClient() {
 
 async function getAccessToken() {
   console.log("🔄 Đang lấy Access Token...");
-  
+
   try {
-      const scriptProperties = PropertiesService.getScriptProperties();
-      const refreshToken = scriptProperties.getProperty("REFRESH_TOKEN");
-      const clientId = scriptProperties.getProperty("CLIENT_ID");
-      const clientSecret = scriptProperties.getProperty("CLIENT_SECRET");
+      const refreshToken = process.env.REFRESH_TOKEN;
+      const clientId = process.env.CLIENT_ID;
+      const clientSecret = process.env.CLIENT_SECRET;
+
+      if (!refreshToken || !clientId || !clientSecret) {
+          throw new Error("Thiếu thông tin OAuth (REFRESH_TOKEN, CLIENT_ID, CLIENT_SECRET) trong môi trường!");
+      }
 
       console.log(`📌 Dùng Client ID: ${clientId}`);
 
