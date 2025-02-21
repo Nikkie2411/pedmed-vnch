@@ -609,9 +609,11 @@ app.post('/api/reset-password', async (req, res) => {
       const headers = rows[0];
       const usernameIndex = headers.indexOf("Username");
       const passwordIndex = headers.indexOf("Password");
+      const device1Index = headers.indexOf("Device_1");
+      const device2Index = headers.indexOf("Device_2");
 
-      if (usernameIndex === -1 || passwordIndex === -1) {
-          console.log("❌ Không tìm thấy cột Username hoặc Password!");
+      if (usernameIndex === -1 || passwordIndex === -1 || device1Index === -1 || device2Index === -1) {
+          console.log("❌ Không tìm thấy cột cần thiết trong Google Sheets!");
           return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
       }
 
@@ -630,15 +632,16 @@ app.post('/api/reset-password', async (req, res) => {
           return res.status(400).json({ success: false, message: "Mật khẩu mới không được giống mật khẩu cũ!" });
       }
 
-      // Cập nhật mật khẩu mới vào Google Sheets
+      // Cập nhật mật khẩu mới & Xóa thiết bị trong Google Sheets
       await sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
           range: `Accounts!B${userRowIndex + 1}`, // Cột B chứa mật khẩu
           valueInputOption: "RAW",
-          resource: { values: [[newPassword]] }
+          resource: { values: [[newPassword, "", "", "", "", "", "", ""]] } // Xóa Device_1 & Device_2
       });
 
       console.log("✅ Mật khẩu đã cập nhật thành công!");
+      console.log("📌 Xóa toàn bộ thiết bị đăng nhập!");
       return res.json({ success: true, message: "Đổi mật khẩu thành công! Hãy đăng nhập lại." });
 
   } catch (error) {
