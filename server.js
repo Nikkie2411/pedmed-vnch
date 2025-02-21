@@ -632,12 +632,20 @@ app.post('/api/reset-password', async (req, res) => {
           return res.status(400).json({ success: false, message: "Mật khẩu mới không được giống mật khẩu cũ!" });
       }
 
-      // Cập nhật mật khẩu mới & Xóa thiết bị trong Google Sheets
+      // Cập nhật mật khẩu mới trong Google Sheets
       await sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
           range: `Accounts!B${userRowIndex + 1}`, // Cột B chứa mật khẩu
           valueInputOption: "RAW",
-          resource: { values: [[newPassword, "", "", "", "", "", "", ""]] } // Xóa Device_1 & Device_2
+          resource: { values: [[newPassword]] }
+      });
+
+      // Xóa Device_1 & Device_2 nhưng giữ nguyên các cột khác
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `Accounts!I${userRowIndex + 1}:J${userRowIndex + 1}`, // Cột I & J chứa thiết bị
+        valueInputOption: "RAW",
+        resource: { values: [["", ""]] }
       });
 
       console.log("✅ Mật khẩu đã cập nhật thành công!");
