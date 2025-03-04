@@ -2,6 +2,54 @@ const express = require('express');
 const cors = require('cors');
 const { google } = require('googleapis');
 
+const NodeCache = require('node-cache');
+// Khởi tạo cache với TTL (time-to-live) là 1 giờ (3600 giây)
+const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // Kiểm tra hết hạn mỗi 2 phút
+
+const winston = require('winston');
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [new winston.transports.Console()]
+});
+
+const Redis = require('redis');
+let redisClient;
+
+const connectRedis = async (retries = 3, delay = 1000) => {
+  redisClient = Redis.createClient({
+    url: process.env.REDIS_URL || 'redis://localhost:6379'
+  });
+
+  redisClient.on('error', (err) => logger.error('Redis Client Error', err));
+
+  for (let i = 0; i < retries; i++) {
+  try {
+    await redisClient.connect();
+    logger.info('Redis connected successfully');
+    return;
+  } catch (err) {
+    logger.error(`Redis connection attempt ${i + 1} failed:`, err);
+      if (i === retries - 1) throw err;
+      await new Promise(resolve => setTimeout(resolve, delay));
+  }
+}
+};
+
+connectRedis(); // Gọi khi khởi động server
+
+(async () => {
+  try {
+    await redisClient.connect();
+    console.log('Redis connected successfully');
+  } catch (err) {
+    console.error('Failed to connect to Redis:', err);
+  }
+})();
+
 const app = express();
 app.use(cors({
   origin: "https://pedmed-vnch.web.app", // Chỉ cho phép từ frontend này
@@ -116,46 +164,109 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
         }
 
         console.log("✅ Email đã gửi thành công:", result);
+        return true; // Thành công
     } catch (error) {
         console.error("❌ Lỗi khi gửi email:", error.message);
+        throw error; // Ném lỗi để endpoint bắt
     }
 }
 
 // API lấy dữ liệu từ Google Sheets
 app.get('/api/drugs', async (req, res) => {
-  try {
-    const sheets = await getSheetsClient();
-    const range = 'pedmedvnch'; // Tên sheet chứa dữ liệu
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range,
-    });
+  logger.info('Request received for /api/drugs', { query: req.query });
+  const { query, page: pageRaw = 1, limit: limitRaw = 10 } = req.query;
 
-    const rows = response.data.values;
-    if (!rows || rows.length === 0) {
-      return res.status(404).send('Không có dữ liệu trong Google Sheet.');
+  const page = isNaN(parseInt(pageRaw)) || parseInt(pageRaw) < 1 ? 1 : parseInt(pageRaw);
+  const limit = isNaN(parseInt(limitRaw)) || parseInt(limitRaw) < 1 ? 10 : parseInt(limitRaw);
+
+  const cacheKey = 'all_drugs'; // Key cố định cho toàn bộ dữ liệu
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000); // 10 giây
+  try {
+    // Kiểm tra cache trước
+    let drugs = cache.get(cacheKey);
+    if (!drugs) {
+      console.log('Cache miss - Lấy dữ liệu từ Google Sheets');
+      const sheets = await getSheetsClient();
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'pedmedvnch',
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+    const rows = response.data.values || [];
+    console.log('Dữ liệu thô từ Google Sheets:', rows);
+
+    drugs = rows.slice(1).map(row => ({
+      'Hoạt chất': row[2], // Cột C
+      'Cập nhật': row[3], // Cột D
+      'Phân loại dược lý': row[4], // Cột E
+      'Liều thông thường trẻ sơ sinh': row[5], // Cột F
+      'Liều thông thường trẻ em': row[6], // Cột G
+      'Hiệu chỉnh liều theo chức năng thận': row[7], // Cột H
+      'Hiệu chỉnh liều theo chức năng gan': row[8], // Cột I
+      'Chống chỉ định': row[9], // Cột J
+      'Tác dụng không mong muốn': row[10], // Cột K
+      'Cách dùng (ngoài IV)': row[11], // Cột L
+      'Tương tác thuốc chống chỉ định': row[12], // Cột M
+      'Ngộ độc/Quá liều': row[13], // Cột N
+      'Các thông số cần theo dõi': row[14], // Cột O
+      'Bảo hiểm y tế thanh toán': row[15], // Cột P
+    }));
+
+    // Lưu vào cache
+    cache.set(cacheKey, drugs);
+    console.log('Dữ liệu đã được lưu vào cache');
+  } else {
+    console.log('Cache hit - Lấy dữ liệu từ cache');
+  }
+
+    // Lọc dữ liệu nếu có query
+    if (query) {
+      const filteredDrugs = drugs.filter(drug =>
+        drug['Hoạt chất']?.toLowerCase().includes(query.toLowerCase()));
+        const start = (page - 1) * limit;
+        const end = start + parseInt(limit);
+        return res.json({
+          total: filteredDrugs.length,
+          page: parseInt(page),
+          data: filteredDrugs.slice(start, end)
+        });
     }
 
-    const data = rows.map(row => row); // Trả về mảng con từ Google Sheets
-    res.json(data);
+    console.log('Dữ liệu đã ánh xạ:', drugs);
+    res.json(drugs);
   } catch (error) {
-    console.error('Lỗi khi lấy dữ liệu từ Google Sheets:', error);
-    res.status(500).send('Không thể lấy dữ liệu.');
+    clearTimeout(timeout);
+    logger.error('Lỗi khi lấy dữ liệu từ Google Sheets:', error);
+    res.status(500).json({ error: 'Không thể lấy dữ liệu' });
   }
+});
+
+app.post('/api/drugs/invalidate-cache', async (req, res) => {
+  cache.del('all_drugs'); // Xóa cache với node-cache
+  res.json({ success: true, message: 'Cache đã được làm mới' });
 });
 
 // API kiểm tra đăng nhập
 app.post('/api/login', async (req, res) => {
+  logger.info('Nhận yêu cầu đăng nhập', { body: req.body });
   const { username, password, deviceId } = req.body;
   console.log("📌 Nhận yêu cầu đăng nhập:", { username, password, deviceId });
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const sheets = await getSheetsClient();
     const range = 'Accounts'; // Tên sheet chứa tài khoản
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range,
+      range: 'Accounts',
+      signal: controller.signal
     });
+    clearTimeout(timeout);
 
     const rows = response.data.values;
     if (!rows || rows.length === 0) {
@@ -223,13 +334,15 @@ app.post('/api/login', async (req, res) => {
     return res.json({ success: true, message: "Đăng nhập thành công và thiết bị đã được lưu!" });
 
 } catch (error) {
-    console.error('Lỗi khi kiểm tra tài khoản:', error);
+    clearTimeout(timeout);
+    logger.error('Lỗi khi kiểm tra tài khoản:', error);
     return res.status(500).send('Lỗi máy chủ.');
 }
 });
 
 //API kiểm tra trạng thái đã duyệt
 app.post('/api/check-session', async (req, res) => {
+  logger.info('Request received for /api/check-session', { body: req.body });
   const { username, deviceId } = req.body;
 
   if (!username || !deviceId) {
@@ -402,6 +515,7 @@ function isValidEmail(email) {
 
 //API đăng ký user
 app.post('/api/register', async (req, res) => {
+  logger.info('Request received for /api/register', { body: req.body });
   const { username, password, fullname, email, phone } = req.body;
 
   if (!username || !password || !fullname || !email || !phone) {
@@ -412,15 +526,18 @@ app.post('/api/register', async (req, res) => {
     return res.status(400).json({ success: false, message: "Email không hợp lệ!" });
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
       const sheets = await getSheetsClient();
-      const range = 'Accounts';
       
       // 🔹 Kiểm tra xem username đã tồn tại chưa
       const response = await sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
-          range,
+          range: 'Accounts',
+          signal: controller.signal
       });
+      clearTimeout(timeout);
 
       const rows = response.data.values;
       if (!rows || rows.length === 0) {
@@ -461,7 +578,8 @@ app.post('/api/register', async (req, res) => {
       res.json({ success: true, message: "Đăng ký thành công! Thông báo phê duyệt tài khoản thành công sẽ được gửi tới email của bạn (có thể cần kiểm tra trong mục Spam)." });
 
   } catch (error) {
-      console.error("Lỗi khi đăng ký tài khoản:", error);
+      clearTimeout(timeout);
+      logger.error("Lỗi khi đăng ký tài khoản:", error);
       res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
@@ -473,117 +591,78 @@ const otpStore = new Map();
 
 //API gửi OTP đến email user
 app.post('/api/send-otp', async (req, res) => {
+  logger.info('Request received for /api/send-otp', { body: req.body });
+
+  if (!redisClient.isOpen) {
+    return res.status(500).json({ success: false, message: "Redis không sẵn sàng!" });
+  }
+
   const { username } = req.body;
-
-  console.log("📌 Nhận yêu cầu gửi OTP từ:", username);
-
   if (!username) {
-      console.log("❌ Thiếu username trong request!");
-      return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
+    logger.console.warn("❌ Thiếu username trong request!");
+    return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
   }
 
   try {
-      console.log(`📌 Kiểm tra tài khoản: ${username}`);
-      const sheets = await getSheetsClient();
-      const range = 'Accounts';
-      const response = await sheets.spreadsheets.values.get({
-          spreadsheetId: SPREADSHEET_ID,
-          range,
-      });
+    const sheets = await getSheetsClient();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Accounts',
+    });
 
-      if (!response || !response.data || !response.data.values) {
-          console.log("❌ Không lấy được dữ liệu từ Google Sheets!");
-          return res.status(500).json({ success: false, message: "Lỗi lấy dữ liệu tài khoản!" });
-      }
+    const rows = response.data.values || [];
+    const headers = rows[0];
+    const usernameIndex = headers.indexOf("Username");
+    const emailIndex = headers.indexOf("Email");
 
-      console.log("✅ Dữ liệu từ Google Sheets:", response.data.values);
+    const user = rows.find(row => row[usernameIndex]?.trim() === username.trim());
+    if (!user) return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản!" });
 
-      const rows = response.data.values;
-      const headers = rows[0];
-      const usernameIndex = headers.indexOf("Username");
-      const emailIndex = headers.indexOf("Email");
+    const userEmail = user[emailIndex];
+    if (!isValidEmail(userEmail)) return res.status(400).json({ success: false, message: "Email không hợp lệ!" });
 
-      if (usernameIndex === -1 || emailIndex === -1) {
-          console.log("❌ Không tìm thấy cột Username hoặc Email!");
-          return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
-      }
+    const otpCode = Math.floor(100000 + Math.random() * 900000);
+    logger.info(`Generated OTP for ${username}: ${otpCode}`);
 
-      const user = rows.find(row => row[usernameIndex]?.trim() === username.trim());
+    // Lưu OTP vào Redis
+    await redisClient.setEx(username, 300, otpCode.toString());
 
-      if (!user) {
-          console.log("❌ Không tìm thấy tài khoản!");
-          return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản!" });
-      }
+    await sendEmailWithGmailAPI(userEmail, "MÃ XÁC NHẬN ĐỔI MẬT KHẨU", `
+      <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
+      <p style="font-weight: bold">Mã xác nhận đổi mật khẩu của bạn là: 
+      <h3 style="font-weight: bold">${otpCode}</h3></p>
+      <p>Vui lòng nhập ngay mã này vào trang web để tiếp tục đổi mật khẩu.</p>
+    `);
 
-      const userEmail = user[emailIndex];
-      if (!userEmail || !userEmail.includes("@")) {
-          console.log(`❌ Email không hợp lệ: ${userEmail}`);
-          return res.status(400).json({ success: false, message: "Email không hợp lệ!" });
-      }
-
-      // 🔹 Tạo mã OTP 6 số ngẫu nhiên
-      const otpCode = Math.floor(100000 + Math.random() * 900000);
-      console.log(`📌 Mã OTP cho ${username}: ${otpCode}`);
-
-      otpStore.set(username, otpCode); // Lưu OTP tạm thời
-
-      // 🔹 Gửi email
-      try {
-          sendEmailWithGmailAPI(userEmail, "MÃ XÁC NHẬN ĐỔI MẬT KHẨU", `
-              <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
-              <p style="font-weight: bold">Mã xác nhận đổi mật khẩu của bạn là: 
-              <h3 style="font-weight: bold">${otpCode}</h3></p>
-              <p>Vui lòng nhập ngay mã này vào trang web để tiếp tục đổi mật khẩu.</p>
-              <p>Cảm ơn bạn đã sử dụng dịch vụ của chúng tôi!</p>
-          `);
-      } catch (emailError) {
-          console.log("❌ Lỗi khi gửi email:", emailError);
-          return res.status(500).json({ success: false, message: "Lỗi khi gửi email!" });
-      }
-
-      return res.json({ success: true, message: "Mã xác nhận đã được gửi đến email của bạn!" });
-
+    return res.json({ success: true, message: "Mã xác nhận đã được gửi đến email của bạn!" });
   } catch (error) {
-      console.error("❌ Lỗi máy chủ khi gửi OTP:", error);
-      return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+    logger.error("❌ Lỗi máy chủ khi gửi OTP:", error);
+    return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
 
 //API xác thực OTP
 app.post('/api/verify-otp', async (req, res) => {
-  const { username, otp } = req.body;
-
-  console.log(`📌 Nhận yêu cầu xác minh OTP - Username: ${username}, OTP: ${otp}`);
-
-  if (!username || !otp) {
-      console.log("❌ Thiếu username hoặc OTP trong request!");
-      return res.status(400).json({ success: false, message: "Thiếu thông tin xác minh!" });
+  logger.info('Request received for /api/verify-otp', { body: req.body });
+  if (!redisClient.isOpen) {
+    logger.error('Redis not ready');
+    return res.status(500).json({ success: false, message: "Redis không sẵn sàng!" });
   }
 
+  const { username, otp } = req.body;
+  if (!username || !otp) return res.status(400).json({ success: false, message: "Thiếu thông tin xác minh!" });
+
   try {
-      // Kiểm tra OTP đã lưu
-      const savedOtp = otpStore.get(username);
-      console.log(`🔍 OTP lưu trong hệ thống: ${savedOtp}`);
+    const savedOtp = await redisClient.get(username);
+    if (!savedOtp) return res.status(400).json({ success: false, message: "OTP không hợp lệ hoặc đã hết hạn!" });
 
-      if (!savedOtp) {
-          console.log("❌ OTP không hợp lệ hoặc đã hết hạn!");
-          return res.status(400).json({ success: false, message: "OTP không hợp lệ hoặc đã hết hạn!" });
-      }
+    if (savedOtp !== otp) return res.status(400).json({ success: false, message: "Mã OTP không đúng!" });
 
-      if (savedOtp !== parseInt(otp)) {
-          console.log("❌ OTP nhập vào không khớp!");
-          return res.status(400).json({ success: false, message: "Mã OTP không đúng!" });
-      }
-
-      // Nếu OTP đúng, xóa OTP khỏi hệ thống
-      otpStore.delete(username);
-
-      console.log("✅ Xác minh OTP thành công!");
-      return res.json({ success: true, message: "Xác minh thành công, hãy đặt lại mật khẩu mới!" });
-
+    await redisClient.del(username);
+    return res.json({ success: true, message: "Xác minh thành công, hãy đặt lại mật khẩu mới!" });
   } catch (error) {
-      console.error("❌ Lỗi khi xác minh OTP:", error);
-      return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+    logger.error("❌ Lỗi khi xác minh OTP:", error);
+    return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
 
@@ -656,6 +735,11 @@ app.post('/api/reset-password', async (req, res) => {
       console.error("❌ Lỗi khi cập nhật mật khẩu:", error);
       return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
+});
+
+app.use((err, req, res, next) => {
+  logger.error('Unhandled error', { error: err.stack });
+  res.status(500).json({ success: false, message: 'Lỗi máy chủ không xác định' });
 });
 
 const PORT = process.env.PORT || 3000;
