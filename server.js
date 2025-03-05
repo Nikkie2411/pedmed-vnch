@@ -54,8 +54,15 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true // Nếu cần gửi cookie hoặc auth token
 }));
-// Xử lý preflight request
-app.options('*', cors()); // Đảm bảo OPTIONS được xử lý cho tất cả route
+
+// Xử lý tất cả yêu cầu OPTIONS một cách rõ ràng
+app.options('*', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(204); // No Content
+});
 
 app.use(express.json());
 
