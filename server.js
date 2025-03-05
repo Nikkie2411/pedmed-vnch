@@ -19,27 +19,35 @@ const logger = winston.createLogger({
 const Redis = require('redis');
 let redisClient;
 
-const connectRedis = async (retries = 3, delay = 1000) => {
+const connectRedis = async (retries = 5, delay = 2000) => {
   redisClient = Redis.createClient({
-    url: process.env.REDIS_URL || 'redis://localhost:6379'
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    socket: {
+      reconnectStrategy: (attempts) => {
+        if (attempts >= retries) return new Error('Max retries reached');
+        return Math.min(attempts * delay, 10000); // Tăng delay, tối đa 10s
+      },
+      connectTimeout: 10000 // Timeout kết nối 10s
+    }
   });
 
   redisClient.on('error', (err) => logger.error('Redis Client Error', err));
+  redisClient.on('reconnecting', () => logger.info('Reconnecting to Redis...'));
+  redisClient.on('ready', () => logger.info('Redis connected successfully'));
 
-  for (let i = 0; i < retries; i++) {
   try {
     await redisClient.connect();
-    logger.info('Redis connected successfully');
-    return;
+    logger.info('Initial Redis connection established');
   } catch (err) {
-    logger.error(`Redis connection attempt ${i + 1} failed:`, err);
-      if (i === retries - 1) throw err;
-      await new Promise(resolve => setTimeout(resolve, delay));
+    logger.error('Failed to connect to Redis after retries:', err);
+    throw err;
   }
-}
 };
 
-connectRedis(); // Gọi khi khởi động server
+connectRedis().catch((err) => {
+  logger.error('Redis initialization failed:', err);
+  process.exit(1); // Thoát nếu không kết nối được lúc khởi động
+});
 
 const app = express();
 app.use(cors({
@@ -584,16 +592,9 @@ const crypto = require("crypto");
 app.post('/api/send-otp', async (req, res) => {
   logger.info('Request received for /api/send-otp', { body: req.body });
 
-  if (!redisClient.isOpen) {
-    logger.error('Redis not ready');
+  if (!redisClient || !redisClient.isOpen) {
+    logger.error('Redis not ready or disconnected');
     return res.status(500).json({ success: false, message: "Redis không sẵn sàng!" });
-  }
-  try {
-    await redisClient.setEx(username, 300, otpCode.toString());
-    logger.info(`Stored OTP in Redis for ${username}`);
-  } catch (error) {
-    logger.error('Error storing OTP in Redis:', error);
-    throw error;
   }
 
   const { username } = req.body;
