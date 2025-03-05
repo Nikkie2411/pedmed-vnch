@@ -7,6 +7,28 @@ const Redis = require('redis');
 
 // Khởi tạo cache với TTL (time-to-live) là 1 giờ (3600 giây)
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // Kiểm tra hết hạn mỗi 2 phút
+
+const app = express();
+
+// Cấu hình CORS
+app.use(cors({
+  origin: "https://pedmed-vnch.web.app",
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true // Nếu cần gửi cookie hoặc auth token
+}));
+
+// Xử lý tất cả yêu cầu OPTIONS một cách rõ ràng
+app.options('*', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(204); // No Content
+});
+
+app.use(express.json());
+
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -44,27 +66,6 @@ const connectRedis = async (retries = 5, delay = 2000) => {
 };
 
 connectRedis(); // Không thoát server ngay
-
-const app = express();
-
-// Cấu hình CORS
-app.use(cors({
-  origin: "https://pedmed-vnch.web.app",
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true // Nếu cần gửi cookie hoặc auth token
-}));
-
-// Xử lý tất cả yêu cầu OPTIONS một cách rõ ràng
-app.options('*', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.sendStatus(204); // No Content
-});
-
-app.use(express.json());
 
 // ID của Google Sheet
 const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
@@ -262,8 +263,9 @@ app.post('/api/drugs/invalidate-cache', async (req, res) => {
 
 // API kiểm tra đăng nhập
 app.post('/api/login', async (req, res) => {
-  logger.info('Nhận yêu cầu đăng nhập', { body: req.body });
+  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
   const { username, password, deviceId } = req.body;
+  logger.info('Login request received', { username, deviceId });
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
