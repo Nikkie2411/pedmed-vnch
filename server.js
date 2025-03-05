@@ -43,10 +43,7 @@ const connectRedis = async (retries = 5, delay = 2000) => {
   }
 };
 
-connectRedis().catch((err) => {
-  logger.error('Redis initialization failed:', err);
-  process.exit(1); // Thoát nếu không kết nối được lúc khởi động
-});
+connectRedis(); // Không thoát server ngay
 
 const app = express();
 
@@ -589,12 +586,14 @@ app.post('/api/send-otp', async (req, res) => {
 
   if (!redisClient || !redisClient.isOpen) {
     logger.error('Redis not ready or disconnected');
-    return res.status(500).json({ success: false, message: "Redis không sẵn sàng!" });
+    res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
+    return res.status(503).json({ success: false, message: "Hệ thống tạm thời không khả dụng, vui lòng thử lại sau!" });
   }
 
   const { username } = req.body;
   if (!username) {
     logger.warn("❌ Thiếu username trong request!");
+    res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
   }
 
@@ -648,6 +647,7 @@ app.post('/api/send-otp', async (req, res) => {
     return res.json({ success: true, message: "Mã xác nhận đã được gửi đến email của bạn!" });
   } catch (error) {
     logger.error("❌ Lỗi máy chủ khi gửi OTP:", error);
+    res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
     return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
