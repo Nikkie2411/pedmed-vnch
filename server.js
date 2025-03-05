@@ -3,7 +3,6 @@ const cors = require('cors');
 const { google } = require('googleapis');
 const NodeCache = require('node-cache');
 const winston = require('winston');
-const Redis = require('redis');
 
 // Khởi tạo cache với TTL (time-to-live) là 1 giờ (3600 giây)
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // Kiểm tra hết hạn mỗi 2 phút
@@ -38,34 +37,39 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()]
 });
 
-let redisClient;
+// Thay Redis bằng Map để lưu OTP
+const otpStore = new Map(); // Lưu trữ { username: { code, expiry } }
 
-const connectRedis = async (retries = 5, delay = 2000) => {
-  redisClient = Redis.createClient({
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
-    socket: {
-      reconnectStrategy: (attempts) => {
-        if (attempts >= retries) return new Error('Max retries reached');
-        return Math.min(attempts * delay, 10000); // Tăng delay, tối đa 10s
-      },
-      connectTimeout: 10000 // Timeout kết nối 10s
+// Hàm đặt OTP với TTL
+const setOtp = (username, otpCode, ttlInSeconds) => {
+  const expiry = Date.now() + ttlInSeconds * 1000;
+  otpStore.set(username, { code: otpCode, expiry });
+  logger.info(`Stored OTP for ${username}: ${otpCode}, expires at ${new Date(expiry).toISOString()}`);
+  
+  // Tự động xóa sau khi hết hạn
+  setTimeout(() => {
+    if (otpStore.get(username)?.expiry === expiry) {
+      otpStore.delete(username);
+      logger.info(`OTP for ${username} expired and removed`);
     }
-  });
-
-  redisClient.on('error', (err) => logger.error('Redis Client Error', err));
-  redisClient.on('reconnecting', () => logger.info('Reconnecting to Redis...'));
-  redisClient.on('ready', () => logger.info('Redis connected successfully'));
-
-  try {
-    await redisClient.connect();
-    logger.info('Initial Redis connection established');
-  } catch (err) {
-    logger.error('Failed to connect to Redis after retries:', err);
-    throw err;
-  }
+  }, ttlInSeconds * 1000);
 };
 
-connectRedis(); // Không thoát server ngay
+// Hàm lấy và kiểm tra OTP
+const getOtp = (username) => {
+  const otpData = otpStore.get(username);
+  if (!otpData || Date.now() > otpData.expiry) {
+    otpStore.delete(username); // Xóa nếu hết hạn
+    return null;
+  }
+  return otpData.code;
+};
+
+// Hàm xóa OTP
+const deleteOtp = (username) => {
+  otpStore.delete(username);
+  logger.info(`OTP for ${username} deleted`);
+};
 
 // ID của Google Sheet
 const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
@@ -114,8 +118,6 @@ async function getAccessToken() {
       });
 
       const json = await response.json();
-      logger.info("📌 Phản hồi từ Google khi lấy Access Token:", json);
-
       if (!response.ok) {
           throw new Error(`Lỗi khi lấy Access Token: ${json.error}`);
       }
@@ -134,13 +136,6 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
 
     try {
         const accessToken = await getAccessToken();
-
-        if (!accessToken) {
-          logger.error('No Access Token received');
-          throw new Error("Không thể lấy Access Token!");
-        }
-        logger.info('Access Token obtained successfully');
-
         const url = "https://www.googleapis.com/gmail/v1/users/me/messages/send";
         const rawEmail = [
             "MIME-Version: 1.0",
@@ -158,7 +153,6 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
             .replace(/\//g, '_')
             .replace(/=+$/, '');
         
-        console.log("📤 Gửi request tới Gmail API...");
         const response = await fetch(url, {
             method: "POST",
             headers: {
@@ -170,7 +164,6 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
 
         const result = await response.json();
         if (!response.ok) {
-            logger.error("❌ Lỗi gửi email:", result);
             throw new Error(`Lỗi gửi email: ${result.error.message}`);
         }
 
@@ -280,7 +273,7 @@ app.post('/api/login', async (req, res) => {
 
     const rows = response.data.values;
     if (!rows || rows.length === 0) {
-        return res.status(404).send('Không có dữ liệu tài khoản.');
+      return res.status(404).json({ success: false, message: 'Không có dữ liệu tài khoản.' });
     }
 
     const headers = rows[0];
@@ -591,18 +584,11 @@ const crypto = require("crypto");
 
 //API gửi OTP đến email user
 app.post('/api/send-otp', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
   logger.info('Request received for /api/send-otp', { body: req.body });
-
-  if (!redisClient || !redisClient.isOpen) {
-    logger.error('Redis not ready or disconnected');
-    res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
-    return res.status(503).json({ success: false, message: "Hệ thống tạm thời không khả dụng, vui lòng thử lại sau!" });
-  }
 
   const { username } = req.body;
   if (!username) {
-    logger.warn("❌ Thiếu username trong request!");
-    res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
   }
 
@@ -640,11 +626,7 @@ app.post('/api/send-otp', async (req, res) => {
     }
 
     const otpCode = Math.floor(100000 + Math.random() * 900000);
-    logger.info(`Generated OTP for ${username}: ${otpCode}`);
-
-    // Lưu OTP vào Redis
-    await redisClient.setEx(username, 300, otpCode.toString());
-    logger.info(`Stored OTP in Redis for ${username}`);
+    setOtp(username, otpCode.toString(), 300); // Lưu OTP với TTL 300 giây
 
     await sendEmailWithGmailAPI(userEmail, "MÃ XÁC NHẬN ĐỔI MẬT KHẨU", `
       <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
@@ -656,29 +638,25 @@ app.post('/api/send-otp', async (req, res) => {
     return res.json({ success: true, message: "Mã xác nhận đã được gửi đến email của bạn!" });
   } catch (error) {
     logger.error("❌ Lỗi máy chủ khi gửi OTP:", error);
-    res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
     return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
 
 //API xác thực OTP
 app.post('/api/verify-otp', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
   logger.info('Request received for /api/verify-otp', { body: req.body });
-  if (!redisClient.isOpen) {
-    logger.error('Redis not ready');
-    return res.status(500).json({ success: false, message: "Redis không sẵn sàng!" });
-  }
 
   const { username, otp } = req.body;
   if (!username || !otp) return res.status(400).json({ success: false, message: "Thiếu thông tin xác minh!" });
 
   try {
-    const savedOtp = await redisClient.get(username);
+    const savedOtp = getOtp(username);
     if (!savedOtp) return res.status(400).json({ success: false, message: "OTP không hợp lệ hoặc đã hết hạn!" });
 
     if (savedOtp !== otp) return res.status(400).json({ success: false, message: "Mã OTP không đúng!" });
 
-    await redisClient.del(username);
+    deleteOtp(username);
     return res.json({ success: true, message: "Xác minh thành công, hãy đặt lại mật khẩu mới!" });
   } catch (error) {
     logger.error("❌ Lỗi khi xác minh OTP:", error);
@@ -759,8 +737,8 @@ app.post('/api/reset-password', async (req, res) => {
 
 // Middleware xử lý lỗi
 app.use((err, req, res, next) => {
-  logger.error('Unhandled error', { error: err.stack });
   res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
+  logger.error('Unhandled error', { error: err.stack });
   res.status(500).json({ success: false, message: 'Lỗi máy chủ không xác định' });
 });
 
