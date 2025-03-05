@@ -1,12 +1,12 @@
 const express = require('express');
 const cors = require('cors');
 const { google } = require('googleapis');
-
 const NodeCache = require('node-cache');
+const winston = require('winston');
+const Redis = require('redis');
+
 // Khởi tạo cache với TTL (time-to-live) là 1 giờ (3600 giây)
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // Kiểm tra hết hạn mỗi 2 phút
-
-const winston = require('winston');
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -16,7 +16,6 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()]
 });
 
-const Redis = require('redis');
 let redisClient;
 
 const connectRedis = async (retries = 5, delay = 2000) => {
@@ -50,11 +49,17 @@ connectRedis().catch((err) => {
 });
 
 const app = express();
+
+// Cấu hình CORS
 app.use(cors({
-  origin: "https://pedmed-vnch.web.app", // Chỉ cho phép từ frontend này
-  methods: "GET,POST,PUT,DELETE",
-  allowedHeaders: "Content-Type,Authorization"
+  origin: "https://pedmed-vnch.web.app",
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true // Nếu cần gửi cookie hoặc auth token
 }));
+// Xử lý preflight request
+app.options('*', cors()); // Đảm bảo OPTIONS được xử lý cho tất cả route
+
 app.use(express.json());
 
 // ID của Google Sheet
@@ -255,13 +260,11 @@ app.post('/api/drugs/invalidate-cache', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   logger.info('Nhận yêu cầu đăng nhập', { body: req.body });
   const { username, password, deviceId } = req.body;
-  console.log("📌 Nhận yêu cầu đăng nhập:", { username, password, deviceId });
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const sheets = await getSheetsClient();
-    const range = 'Accounts'; // Tên sheet chứa tài khoản
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts',
@@ -287,27 +290,21 @@ app.post('/api/login', async (req, res) => {
 
     const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
     if (userRowIndex === -1) {
-      console.log("❌ Sai tài khoản hoặc mật khẩu!");
       return res.json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
     }
 
     const user = rows[userRowIndex];
-
     // 🔹 Kiểm tra mật khẩu
     if (user[passwordIndex]?.trim() !== password.trim()) {
-      console.log("❌ Sai mật khẩu!");
       return res.json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
     }
 
     // 🔹 Kiểm tra trạng thái "Đã duyệt"
     if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
-      console.log("⚠️ Tài khoản chưa được phê duyệt!");
       return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
 
     let currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
-    console.log(`📌 Danh sách thiết bị hiện tại của ${username}: ${currentDevices}`);
-
     if (currentDevices.includes(deviceId)) {
         return res.json({ success: true, message: "Đăng nhập thành công!" });
     }
@@ -322,8 +319,6 @@ app.post('/api/login', async (req, res) => {
 
     currentDevices.push(deviceId);
     currentDevices = currentDevices.slice(-2);
-
-    console.log(`📌 Cập nhật thiết bị mới cho ${username}: ${currentDevices}`);
 
     await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
@@ -753,12 +748,14 @@ app.post('/api/reset-password', async (req, res) => {
   }
 });
 
+// Middleware xử lý lỗi
 app.use((err, req, res, next) => {
   logger.error('Unhandled error', { error: err.stack });
+  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
   res.status(500).json({ success: false, message: 'Lỗi máy chủ không xác định' });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server đang chạy tại http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server đang chạy tại http://0.0.0.0:${PORT}`);
 });
