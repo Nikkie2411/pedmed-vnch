@@ -59,8 +59,14 @@ const auth = new google.auth.GoogleAuth({
 });
 
 async function getSheetsClient() {
-  const authClient = await auth.getClient();
-  return google.sheets({ version: 'v4', auth: authClient });
+  logger.info('Initializing Google Sheets client');
+  try {
+    const authClient = await auth.getClient();
+    return google.sheets({ version: 'v4', auth: authClient });
+  } catch (error) {
+    logger.error('Failed to initialize Google Sheets client:', error);
+    throw error;
+  }
 }
 
 async function getAccessToken() {
@@ -106,18 +112,18 @@ async function getAccessToken() {
 
 // 📧 Hàm gửi email bằng Gmail API
 async function sendEmailWithGmailAPI(toEmail, subject, body) {
-    console.log(`📧 Chuẩn bị gửi email đến: ${toEmail}`);
+  logger.info(`📧 Chuẩn bị gửi email đến: ${toEmail}`);
 
     try {
-        console.log("🔄 Đang lấy Access Token...");
         const accessToken = await getAccessToken();
-        console.log(`✅ Lấy được Access Token: ${accessToken ? "Thành công" : "Không có Access Token"}`);
 
         if (!accessToken) {
-            throw new Error("Không thể lấy Access Token!");
+          logger.error('No Access Token received');
+          throw new Error("Không thể lấy Access Token!");
         }
-        const url = "https://www.googleapis.com/gmail/v1/users/me/messages/send";
+        logger.info('Access Token obtained successfully');
 
+        const url = "https://www.googleapis.com/gmail/v1/users/me/messages/send";
         const rawEmail = [
             "MIME-Version: 1.0",
             "Content-Type: text/html; charset=UTF-8",
@@ -145,16 +151,15 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
         });
 
         const result = await response.json();
-
         if (!response.ok) {
-            console.error("❌ Lỗi gửi email:", result);
+            logger.error("❌ Lỗi gửi email:", result);
             throw new Error(`Lỗi gửi email: ${result.error.message}`);
         }
 
-        console.log("✅ Email đã gửi thành công:", result);
+        logger.info("✅ Email đã gửi thành công:", result);
         return true; // Thành công
     } catch (error) {
-        console.error("❌ Lỗi khi gửi email:", error.message);
+        logger.error("❌ Lỗi khi gửi email:", error.message);
         throw error; // Ném lỗi để endpoint bắt
     }
 }
@@ -580,38 +585,62 @@ app.post('/api/send-otp', async (req, res) => {
   logger.info('Request received for /api/send-otp', { body: req.body });
 
   if (!redisClient.isOpen) {
+    logger.error('Redis not ready');
     return res.status(500).json({ success: false, message: "Redis không sẵn sàng!" });
+  }
+  try {
+    await redisClient.setEx(username, 300, otpCode.toString());
+    logger.info(`Stored OTP in Redis for ${username}`);
+  } catch (error) {
+    logger.error('Error storing OTP in Redis:', error);
+    throw error;
   }
 
   const { username } = req.body;
   if (!username) {
-    logger.console.warn("❌ Thiếu username trong request!");
+    logger.warn("❌ Thiếu username trong request!");
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
   }
 
   try {
+    logger.info(`Fetching user data for ${username}`);
     const sheets = await getSheetsClient();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts',
+      signal: controller.signal
     });
+    clearTimeout(timeout);
 
     const rows = response.data.values || [];
+    if (!rows.length) {
+      logger.warn('No data found in Accounts sheet');
+      return res.status(404).json({ success: false, message: "Không tìm thấy dữ liệu tài khoản!" });
+    }
     const headers = rows[0];
     const usernameIndex = headers.indexOf("Username");
     const emailIndex = headers.indexOf("Email");
 
     const user = rows.find(row => row[usernameIndex]?.trim() === username.trim());
-    if (!user) return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản!" });
+    if (!user) {
+      logger.warn(`User ${username} not found`);
+      return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản!" });
+    }
 
     const userEmail = user[emailIndex];
-    if (!isValidEmail(userEmail)) return res.status(400).json({ success: false, message: "Email không hợp lệ!" });
+    if (!isValidEmail(userEmail)) {
+      logger.warn(`Invalid email for ${username}: ${userEmail}`);
+      return res.status(400).json({ success: false, message: "Email không hợp lệ!" });
+    }
 
     const otpCode = Math.floor(100000 + Math.random() * 900000);
     logger.info(`Generated OTP for ${username}: ${otpCode}`);
 
     // Lưu OTP vào Redis
     await redisClient.setEx(username, 300, otpCode.toString());
+    logger.info(`Stored OTP in Redis for ${username}`);
 
     await sendEmailWithGmailAPI(userEmail, "MÃ XÁC NHẬN ĐỔI MẬT KHẨU", `
       <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
