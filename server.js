@@ -41,15 +41,6 @@ const connectRedis = async (retries = 3, delay = 1000) => {
 
 connectRedis(); // Gọi khi khởi động server
 
-(async () => {
-  try {
-    await redisClient.connect();
-    console.log('Redis connected successfully');
-  } catch (err) {
-    console.error('Failed to connect to Redis:', err);
-  }
-})();
-
 const app = express();
 app.use(cors({
   origin: "https://pedmed-vnch.web.app", // Chỉ cho phép từ frontend này
@@ -73,7 +64,7 @@ async function getSheetsClient() {
 }
 
 async function getAccessToken() {
-  console.log("🔄 Đang lấy Access Token...");
+  logger.info("🔄 Đang lấy Access Token...");
 
   try {
       const refreshToken = process.env.REFRESH_TOKEN;
@@ -83,8 +74,6 @@ async function getAccessToken() {
       if (!refreshToken || !clientId || !clientSecret) {
           throw new Error("Thiếu thông tin OAuth (REFRESH_TOKEN, CLIENT_ID, CLIENT_SECRET) trong môi trường!");
       }
-
-      console.log(`📌 Dùng Client ID: ${clientId}`);
 
       const tokenUrl = "https://oauth2.googleapis.com/token";
       const payload = new URLSearchParams({
@@ -101,20 +90,19 @@ async function getAccessToken() {
       });
 
       const json = await response.json();
-      console.log("📌 Phản hồi từ Google khi lấy Access Token:", json);
+      logger.info("📌 Phản hồi từ Google khi lấy Access Token:", json);
 
       if (!response.ok) {
           throw new Error(`Lỗi khi lấy Access Token: ${json.error}`);
       }
 
-      console.log("✅ Access Token lấy thành công!");
+      logger.info("✅ Access Token lấy thành công!");
       return json.access_token;
   } catch (error) {
-      console.error("❌ Lỗi khi lấy Access Token:", error.message);
+      logger.error("❌ Lỗi khi lấy Access Token:", error.message);
+      throw error;
   }
 }
-
-const fetch = require('node-fetch'); // Nếu bạn dùng node-fetch để gửi request
 
 // 📧 Hàm gửi email bằng Gmail API
 async function sendEmailWithGmailAPI(toEmail, subject, body) {
@@ -403,12 +391,13 @@ app.post('/api/check-session', async (req, res) => {
     res.json({ success: true });
 
   } catch (error) {
-    console.error("❌ Lỗi khi kiểm tra trạng thái tài khoản:", error);
+    logger.error("❌ Lỗi khi kiểm tra trạng thái tài khoản:", error);
     res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
 
 app.post('/api/logout-device', async (req, res) => {
+  logger.info('Request received for /api/logout-device', { body: req.body });
   try {
       const { username, deviceId, newDeviceId } = req.body;
 
@@ -449,7 +438,7 @@ app.post('/api/logout-device', async (req, res) => {
       return res.json({ success: true, message: "Đăng xuất thành công!" });
 
     } catch (error) {
-      console.error('Lỗi khi đăng xuất thiết bị:', error);
+      logger.error('Lỗi khi đăng xuất thiết bị:', error);
       return res.status(500).json({ success: false, message: "Lỗi máy chủ" });
     }
   });
@@ -586,9 +575,6 @@ app.post('/api/register', async (req, res) => {
 
 const crypto = require("crypto");
 
-// Lưu OTP tạm thời (sẽ mất đi khi server restart)
-const otpStore = new Map(); 
-
 //API gửi OTP đến email user
 app.post('/api/send-otp', async (req, res) => {
   logger.info('Request received for /api/send-otp', { body: req.body });
@@ -668,8 +654,8 @@ app.post('/api/verify-otp', async (req, res) => {
 
 //API cập nhật mật khẩu mới
 app.post('/api/reset-password', async (req, res) => {
+  logger.info('Request received for /api/reset-password', { body: req.body });
   const { username, newPassword } = req.body;
-  console.log(`📌 Nhận yêu cầu đổi mật khẩu - Username: ${username}`);
 
   if (!username || !newPassword) {
       console.log("❌ Thiếu thông tin đổi mật khẩu!");
@@ -732,7 +718,7 @@ app.post('/api/reset-password', async (req, res) => {
       return res.json({ success: true, message: "Đổi mật khẩu thành công! Hãy đăng nhập lại." });
 
   } catch (error) {
-      console.error("❌ Lỗi khi cập nhật mật khẩu:", error);
+      logger.error("❌ Lỗi khi cập nhật mật khẩu:", error);
       return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
   }
 });
