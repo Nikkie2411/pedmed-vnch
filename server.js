@@ -3,6 +3,7 @@ const cors = require('cors');
 const { google } = require('googleapis');
 const NodeCache = require('node-cache');
 const winston = require('winston');
+const bcrypt = require('bcrypt');
 
 // Khởi tạo cache với TTL (time-to-live) là 1 giờ (3600 giây)
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // Kiểm tra hết hạn mỗi 2 phút
@@ -293,8 +294,9 @@ app.post('/api/login', async (req, res) => {
     }
 
     const user = rows[userRowIndex];
-    // 🔹 Kiểm tra mật khẩu
-    if (user[passwordIndex]?.trim() !== password.trim()) {
+    // So sánh mật khẩu với hash
+    const isPasswordValid = await bcrypt.compare(password.trim(), user[passwordIndex]?.trim());
+    if (!isPasswordValid) {
       return res.json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
     }
 
@@ -550,19 +552,21 @@ app.post('/api/register', async (req, res) => {
 
       const accounts = rows.slice(1);
       const isTaken = accounts.some(row => row[usernameIndex]?.trim() === username.trim());
-      const isEmailTaken = accounts.some(row => row[emailIndex]?.trim() === email.trim());
-
       if (isTaken) {
           return res.json({ success: false, message: "Tên đăng nhập không hợp lệ!" });
       }
 
+      const isEmailTaken = accounts.some(row => row[emailIndex]?.trim() === email.trim());
       if (isEmailTaken) {
         return res.json({ success: false, message: "Email đã được sử dụng!" });
       }
 
+      // Hash mật khẩu
+      const hashedPassword = await bcrypt.hash(password, 10); // 10 là số vòng hash
+
       // 🔹 Thêm cột Date (ngày đăng ký)
       const today = new Date().toISOString().split("T")[0]; // Lấy ngày hiện tại YYYY-MM-DD
-      const newUser = [[username, password, fullname, email, phone, "Chưa duyệt", today]];
+      const newUser = [[username, hashedPassword, fullname, email, phone, "Chưa duyệt", today]];
 
       await sheets.spreadsheets.values.append({
           spreadsheetId: SPREADSHEET_ID,
@@ -670,16 +674,14 @@ app.post('/api/reset-password', async (req, res) => {
   const { username, newPassword } = req.body;
 
   if (!username || !newPassword) {
-      console.log("❌ Thiếu thông tin đổi mật khẩu!");
       return res.status(400).json({ success: false, message: "Vui lòng nhập đầy đủ thông tin!" });
   }
 
   try {
       const sheets = await getSheetsClient();
-      const range = 'Accounts';
       const response = await sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
-          range,
+          range: 'Accounts',
       });
 
       const rows = response.data.values;
@@ -695,27 +697,23 @@ app.post('/api/reset-password', async (req, res) => {
       }
 
       const userRowIndex = rows.findIndex(row => row[usernameIndex]?.trim() === username.trim());
-
       if (userRowIndex === -1) {
           console.log("❌ Tài khoản không tồn tại!");
           return res.status(404).json({ success: false, message: "Tài khoản không tồn tại!" });
       }
 
-      const oldPassword = rows[userRowIndex][passwordIndex];
-      console.log(`🔍 Mật khẩu cũ: ${oldPassword}`);
+      const oldPasswordHash = rows[userRowIndex][passwordIndex];
+    if (await bcrypt.compare(newPassword, oldPasswordHash)) {
+      return res.status(400).json({ success: false, message: "Mật khẩu mới không được giống mật khẩu cũ!" });
+    }
 
-      if (newPassword === oldPassword) {
-          console.log("❌ Mật khẩu mới không được trùng với mật khẩu cũ!");
-          return res.status(400).json({ success: false, message: "Mật khẩu mới không được giống mật khẩu cũ!" });
-      }
-
-      // Cập nhật mật khẩu mới trong Google Sheets
-      await sheets.spreadsheets.values.update({
-          spreadsheetId: SPREADSHEET_ID,
-          range: `Accounts!B${userRowIndex + 1}`, // Cột B chứa mật khẩu
-          valueInputOption: "RAW",
-          resource: { values: [[newPassword]] }
-      });
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Accounts!B${userRowIndex + 1}`,
+      valueInputOption: "RAW",
+      resource: { values: [[hashedNewPassword]] }
+    });
 
       // Xóa Device_1 & Device_2 nhưng giữ nguyên các cột khác
       await sheets.spreadsheets.values.update({
@@ -725,8 +723,6 @@ app.post('/api/reset-password', async (req, res) => {
         resource: { values: [["", ""]] }
       });
 
-      console.log("✅ Mật khẩu đã cập nhật thành công!");
-      console.log("📌 Xóa toàn bộ thiết bị đăng nhập!");
       return res.json({ success: true, message: "Đổi mật khẩu thành công! Hãy đăng nhập lại." });
 
   } catch (error) {
@@ -746,3 +742,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server đang chạy tại http://0.0.0.0:${PORT}`);
 });
+
