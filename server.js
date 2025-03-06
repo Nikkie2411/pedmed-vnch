@@ -275,11 +275,10 @@ const loginLimiter = rateLimit({
 // API kiểm tra đăng nhập
 app.post('/api/login', loginLimiter, async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
-  const { username, password, deviceId } = req.body;
-  logger.info('Login request received', { username, deviceId });
+  const { username, password, deviceId, deviceName } = req.body;
+  logger.info('Login request received', { username, deviceId, deviceName });
 
-  // Kiểm tra dữ liệu đầu vào
-  if (!username || !password || !deviceId) {
+  if (!username || !password || !deviceId || !deviceName) {
     return res.status(400).json({ success: false, message: "Thiếu thông tin đăng nhập!" });
   }
 
@@ -295,68 +294,74 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     clearTimeout(timeout);
 
     const rows = response.data.values;
-    if (!rows || rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Không có dữ liệu tài khoản.' });
-    }
-
     const headers = rows[0];
     const usernameIndex = headers.indexOf("Username");
     const passwordIndex = headers.indexOf("Password");
     const approvedIndex = headers.indexOf("Approved");
-    const device1Index = headers.indexOf("Device_1");
-    const device2Index = headers.indexOf("Device_2");
+    const device1IdIndex = headers.indexOf("Device_1_ID");
+    const device1NameIndex = headers.indexOf("Device_1_Name");
+    const device2IdIndex = headers.indexOf("Device_2_ID");
+    const device2NameIndex = headers.indexOf("Device_2_Name");
 
-    if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1) {
+    if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1 || device1IdIndex === -1) {
       return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
     }
 
     const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
     if (userRowIndex === -1) {
-      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" }); // 401 Unauthorized
+      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
     }
 
     const user = rows[userRowIndex];
-    // So sánh mật khẩu với hash
     const isPasswordValid = await bcrypt.compare(password.trim(), user[passwordIndex]?.trim() || '');
     if (!isPasswordValid) {
-      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" }); // 401 Unauthorized
+      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
     }
 
-    // 🔹 Kiểm tra trạng thái "Đã duyệt"
     if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
-      return res.status(403).json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." }); // 403 Forbidden
+      return res.status(403).json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
     }
 
-    let currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
-    if (currentDevices.includes(deviceId)) {
-        return res.json({ success: true, message: "Đăng nhập thành công!" });
+    let currentDevices = [
+      { id: user[device1IdIndex], name: user[device1NameIndex] },
+      { id: user[device2IdIndex], name: user[device2NameIndex] }
+    ].filter(d => d.id);
+
+    if (currentDevices.some(d => d.id === deviceId)) {
+      return res.status(200).json({ success: true, message: "Đăng nhập thành công!" });
     }
 
     if (currentDevices.length >= 2) {
-        return res.status(403).json({
-            success: false,
-            message: "Tài khoản đã đăng nhập trên 2 thiết bị. Vui lòng chọn thiết bị cần đăng xuất.",
-            devices: currentDevices
-        }); // 403 Forbidden
+      return res.status(403).json({
+        success: false,
+        message: "Tài khoản đã đăng nhập trên 2 thiết bị. Vui lòng chọn thiết bị cần đăng xuất.",
+        devices: currentDevices.map(d => ({ id: d.id, name: d.name })) // Trả về cả id và name
+      });
     }
 
-    currentDevices.push(deviceId);
+    currentDevices.push({ id: deviceId, name: deviceName });
     currentDevices = currentDevices.slice(-2);
 
+    const values = [
+      currentDevices[0]?.id || "",
+      currentDevices[0]?.name || "",
+      currentDevices[1]?.id || "",
+      currentDevices[1]?.name || ""
+    ];
+
     await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `Accounts!I${userRowIndex + 1}:J${userRowIndex + 1}`,
-        valueInputOption: "RAW",
-        resource: { values: [currentDevices] }
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Accounts!I${userRowIndex + 1}:L${userRowIndex + 1}`, // Cập nhật 4 cột
+      valueInputOption: "RAW",
+      resource: { values: [values] }
     });
 
     return res.status(200).json({ success: true, message: "Đăng nhập thành công và thiết bị đã được lưu!" });
-
-} catch (error) {
+  } catch (error) {
     clearTimeout(timeout);
     logger.error('Lỗi khi kiểm tra tài khoản:', error);
-    return res.status(500).send('Lỗi máy chủ.');
-}
+    return res.status(500).json({ success: false, message: 'Lỗi máy chủ.' });
+  }
 });
 
 //API kiểm tra trạng thái đã duyệt
@@ -474,6 +479,53 @@ app.post('/api/logout-device', async (req, res) => {
     }
   });
 
+app.post('/api/logout-device-from-sheet', async (req, res) => {
+    const { username, deviceId } = req.body;
+  
+    const sheets = await getSheetsClient();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Accounts',
+    });
+  
+    const rows = response.data.values;
+    const headers = rows[0];
+    const usernameIndex = headers.indexOf("Username");
+    const device1IdIndex = headers.indexOf("Device_1_ID");
+    const device1NameIndex = headers.indexOf("Device_1_Name");
+    const device2IdIndex = headers.indexOf("Device_2_ID");
+    const device2NameIndex = headers.indexOf("Device_2_Name");
+  
+    const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
+    if (userRowIndex === -1) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản!" });
+    }
+  
+    let devices = [
+      { id: rows[userRowIndex][device1IdIndex], name: rows[userRowIndex][device1NameIndex] },
+      { id: rows[userRowIndex][device2IdIndex], name: rows[userRowIndex][device2NameIndex] }
+    ].filter(d => d.id);
+  
+    if (!devices.some(d => d.id === deviceId)) {
+      return res.status(400).json({ success: false, message: "Thiết bị không tồn tại trong danh sách!" });
+    }
+  
+    devices = devices.filter(d => d.id !== deviceId);
+    const values = [
+      devices[0]?.id || "", devices[0]?.name || "",
+      devices[1]?.id || "", devices[1]?.name || ""
+    ];
+  
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Accounts!I${userRowIndex + 1}:L${userRowIndex + 1}`,
+      valueInputOption: "RAW",
+      resource: { values: [values] }
+    });
+  
+    return res.json({ success: true, message: "Thiết bị đã được xóa khỏi danh sách!" });
+  });
+  
 //API kiểm tra tên đăng nhập
 let cachedUsernames = [];
 
