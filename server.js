@@ -392,11 +392,11 @@ app.post('/api/check-session', async (req, res) => {
     const headers = rows[0];
     const usernameIndex = headers.indexOf("Username");
     const approvedIndex = headers.indexOf("Approved");
-    const device1Index = headers.indexOf("Device_1");
-    const device2Index = headers.indexOf("Device_2");
+    const device1IdIndex = headers.indexOf("Device_1_ID");
+    const device2IdIndex = headers.indexOf("Device_2_ID");
 
-    if (usernameIndex === -1 || approvedIndex === -1 || device1Index === -1 || device2Index === -1) {
-      console.log("Lỗi: Không tìm thấy cột Username, Approved hoặc Device");
+    if (usernameIndex === -1 || approvedIndex === -1 || device1IdIndex === -1 || device2IdIndex === -1) {
+      console.log("Lỗi: Không tìm thấy cột Username, Approved, Device_1_ID hoặc Device_2_ID");
       return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
     }
 
@@ -416,7 +416,7 @@ app.post('/api/check-session', async (req, res) => {
     }
 
     // Kiểm tra xem thiết bị còn hợp lệ không
-    const currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
+    const currentDevices = [user[device1IdIndex], user[device2IdIndex]].filter(Boolean);
     console.log(`📌 Danh sách thiết bị hợp lệ: ${currentDevices}`);
 
     if (!currentDevices.includes(deviceId)) {
