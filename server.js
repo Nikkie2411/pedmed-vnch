@@ -257,10 +257,21 @@ app.post('/api/drugs/invalidate-cache', async (req, res) => {
 
 const rateLimit = require('express-rate-limit');
 
+// Tạo store để lưu trữ số lần thử cho từng username (dùng bộ nhớ RAM)
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 phút
   max: 5, // 5 lần thử
-  message: { success: false, message: "Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau 15 phút!" }
+  message: { success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" },
+  keyGenerator: (req) => {
+    // Sử dụng username từ body làm key
+    const username = req.body.username ? req.body.username.trim().toLowerCase() : 'unknown';
+    return username;
+  },
+  skipSuccessfulRequests: true, // Bỏ qua giới hạn nếu đăng nhập thành công
+  handler: (req, res, next, options) => {
+    // Tùy chỉnh phản hồi khi vượt giới hạn
+    res.status(429).json(options.message); // 429: Too Many Requests
+  }
 });
 
 // API kiểm tra đăng nhập
