@@ -263,14 +263,12 @@ const loginLimiter = rateLimit({
   max: 5, // 5 lần thử
   message: { success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" },
   keyGenerator: (req) => {
-    // Sử dụng username từ body làm key
     const username = req.body.username ? req.body.username.trim().toLowerCase() : 'unknown';
     return username;
   },
-  skipSuccessfulRequests: true, // Bỏ qua giới hạn nếu đăng nhập thành công
-  handler: (req, res, next, options) => {
-    // Tùy chỉnh phản hồi khi vượt giới hạn
-    res.status(429).json(options.message); // 429: Too Many Requests
+  skipSuccessfulRequests: true, // Chỉ bỏ qua khi đăng nhập thành công
+  handler: (req, res) => {
+    res.status(429).json({ success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" });
   }
 });
 
@@ -279,6 +277,11 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
   const { username, password, deviceId } = req.body;
   logger.info('Login request received', { username, deviceId });
+
+  // Kiểm tra dữ liệu đầu vào
+  if (!username || !password || !deviceId) {
+    return res.status(400).json({ success: false, message: "Thiếu thông tin đăng nhập!" });
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
@@ -309,19 +312,19 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 
     const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
     if (userRowIndex === -1) {
-      return res.json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
+      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" }); // 401 Unauthorized
     }
 
     const user = rows[userRowIndex];
     // So sánh mật khẩu với hash
-    const isPasswordValid = await bcrypt.compare(password.trim(), user[passwordIndex]?.trim());
+    const isPasswordValid = await bcrypt.compare(password.trim(), user[passwordIndex]?.trim() || '');
     if (!isPasswordValid) {
-      return res.json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
+      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" }); // 401 Unauthorized
     }
 
     // 🔹 Kiểm tra trạng thái "Đã duyệt"
     if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
-      return res.json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
+      return res.status(403).json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." }); // 403 Forbidden
     }
 
     let currentDevices = [user[device1Index], user[device2Index]].filter(Boolean);
@@ -330,11 +333,11 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     }
 
     if (currentDevices.length >= 2) {
-        return res.json({
+        return res.status(403).json({
             success: false,
             message: "Tài khoản đã đăng nhập trên 2 thiết bị. Vui lòng chọn thiết bị cần đăng xuất.",
             devices: currentDevices
-        });
+        }); // 403 Forbidden
     }
 
     currentDevices.push(deviceId);
@@ -347,7 +350,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         resource: { values: [currentDevices] }
     });
 
-    return res.json({ success: true, message: "Đăng nhập thành công và thiết bị đã được lưu!" });
+    return res.status(200).json({ success: true, message: "Đăng nhập thành công và thiết bị đã được lưu!" });
 
 } catch (error) {
     clearTimeout(timeout);
