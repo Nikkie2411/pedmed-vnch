@@ -278,7 +278,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   const { username, password, deviceId, deviceName } = req.body;
   logger.info('Login request received', { username, deviceId, deviceName });
 
-  if (!username || !password || !deviceId || !deviceName) {
+  if (!username || !password || !deviceId) {
     return res.status(400).json({ success: false, message: "Thiếu thông tin đăng nhập!" });
   }
 
