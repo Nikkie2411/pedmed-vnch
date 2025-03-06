@@ -255,8 +255,16 @@ app.post('/api/drugs/invalidate-cache', async (req, res) => {
   res.json({ success: true, message: 'Cache đã được làm mới' });
 });
 
+const rateLimit = require('express-rate-limit');
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 phút
+  max: 5, // 5 lần thử
+  message: { success: false, message: "Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau 15 phút!" }
+});
+
 // API kiểm tra đăng nhập
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
   const { username, password, deviceId } = req.body;
   logger.info('Login request received', { username, deviceId });
