@@ -340,7 +340,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     const device2IdIndex = headers.indexOf("Device_2_ID");
     const device2NameIndex = headers.indexOf("Device_2_Name");
 
-    if (usernameIndex === -1 || passwordIndex === -1 || approvedIndex === -1 || device1IdIndex === -1) {
+    if ([usernameIndex, passwordIndex, approvedIndex, device1IdIndex, device1NameIndex, device2IdIndex, device2NameIndex].includes(-1)) {
       return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
     }
 
@@ -386,9 +386,12 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       currentDevices[1]?.name || ""
     ];
 
+    // Tính range động dựa trên chỉ số cột
+    const startCol = String.fromCharCode(65 + device1IdIndex); // Ví dụ: L (11 -> 76)
+    const endCol = String.fromCharCode(65 + device2NameIndex); // Ví dụ: O (14 -> 79)
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `Accounts!I${userRowIndex + 1}:L${userRowIndex + 1}`, // Cập nhật 4 cột
+      range: `Accounts!${startCol}${userRowIndex + 1}:${endCol}${userRowIndex + 1}`,
       valueInputOption: "RAW",
       resource: { values: [values] }
     });
@@ -414,10 +417,9 @@ app.post('/api/check-session', async (req, res) => {
   try {
     console.log(`📌 Kiểm tra trạng thái tài khoản của: ${username}, DeviceID: ${deviceId}`);
     const sheets = await getSheetsClient();
-    const range = 'Accounts'; 
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range,
+      range: 'Accounts',
     });
 
     const rows = response.data.values;
@@ -432,8 +434,8 @@ app.post('/api/check-session', async (req, res) => {
     const device1IdIndex = headers.indexOf("Device_1_ID");
     const device2IdIndex = headers.indexOf("Device_2_ID");
 
-    if (usernameIndex === -1 || approvedIndex === -1 || device1IdIndex === -1 || device2IdIndex === -1) {
-      console.log("Lỗi: Không tìm thấy cột Username, Approved, Device_1_ID hoặc Device_2_ID");
+    if ([usernameIndex, approvedIndex, device1IdIndex, device2IdIndex].includes(-1)) {
+      console.log("Lỗi: Không tìm thấy cột cần thiết");
       return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
     }
 
@@ -492,7 +494,7 @@ app.post('/api/logout-device', async (req, res) => {
     const device2IdIndex = headers.indexOf("Device_2_ID");
     const device2NameIndex = headers.indexOf("Device_2_Name");
 
-    if (usernameIndex === -1 || device1IdIndex === -1 || device2IdIndex === -1) {
+    if ([usernameIndex, device1IdIndex, device1NameIndex, device2IdIndex, device2NameIndex].includes(-1)) {
       return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
     }
 
@@ -527,9 +529,11 @@ app.post('/api/logout-device', async (req, res) => {
       devices[1]?.id || "", devices[1]?.name || ""
     ];
 
+    const startCol = String.fromCharCode(65 + device1IdIndex);
+    const endCol = String.fromCharCode(65 + device2NameIndex);
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `Accounts!I${userRowIndex + 1}:L${userRowIndex + 1}`, // Cập nhật 4 cột
+      range: `Accounts!${startCol}${userRowIndex + 1}:${endCol}${userRowIndex + 1}`,
       valueInputOption: "RAW",
       resource: { values: [values] }
     });
@@ -557,6 +561,10 @@ app.post('/api/logout-device-from-sheet', async (req, res) => {
     const device1NameIndex = headers.indexOf("Device_1_Name");
     const device2IdIndex = headers.indexOf("Device_2_ID");
     const device2NameIndex = headers.indexOf("Device_2_Name");
+
+    if ([usernameIndex, device1IdIndex, device1NameIndex, device2IdIndex, device2NameIndex].includes(-1)) {
+      return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+    }
   
     const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
     if (userRowIndex === -1) {
@@ -578,12 +586,14 @@ app.post('/api/logout-device-from-sheet', async (req, res) => {
       devices[1]?.id || "", devices[1]?.name || ""
     ];
   
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `Accounts!I${userRowIndex + 1}:L${userRowIndex + 1}`,
-      valueInputOption: "RAW",
-      resource: { values: [values] }
-    });
+  const startCol = String.fromCharCode(65 + device1IdIndex);
+  const endCol = String.fromCharCode(65 + device2NameIndex);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `Accounts!${startCol}${userRowIndex + 1}:${endCol}${userRowIndex + 1}`,
+    valueInputOption: "RAW",
+    resource: { values: [values] }
+  });
   
     return res.json({ success: true, message: "Thiết bị đã được xóa khỏi danh sách!" });
   });
@@ -647,12 +657,17 @@ function isValidEmail(email) {
   return emailPattern.test(email);
 }
 
+function isValidPhone(phone) {
+  const phonePattern = /^(0[35789])[0-9]{8}$/; // Định dạng VN: 09x, 08x, 07x, 03x, 05x + 8 số
+  return phonePattern.test(phone);
+}
+
 //API đăng ký user
 app.post('/api/register', async (req, res) => {
   logger.info('Request received for /api/register', { body: req.body });
-  const { username, password, fullname, email, phone } = req.body;
+  const { username, password, fullname, email, phone, occupation, workplace, province } = req.body;
 
-  if (!username || !password || !fullname || !email || !phone) {
+  if (!username || !password || !fullname || !email || !phone || !occupation || !workplace || !province) {
       return res.status(400).json({ success: false, message: "Vui lòng điền đầy đủ thông tin!" });
   }
 
@@ -660,12 +675,14 @@ app.post('/api/register', async (req, res) => {
     return res.status(400).json({ success: false, message: "Email không hợp lệ!" });
   }
 
+  if (!isValidPhone(phone)) {
+    return res.status(400).json({ success: false, message: "Số điện thoại không hợp lệ!" });
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
       const sheets = await getSheetsClient();
-      
-      // 🔹 Kiểm tra xem username đã tồn tại chưa
       const response = await sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
           range: 'Accounts',
@@ -702,14 +719,32 @@ app.post('/api/register', async (req, res) => {
 
       // 🔹 Thêm cột Date (ngày đăng ký)
       const today = new Date().toISOString().split("T")[0]; // Lấy ngày hiện tại YYYY-MM-DD
-      const newUser = [[username, hashedPassword, fullname, email, phone, "Chưa duyệt", today]];
+      const newUser = [
+        username,
+        hashedPassword,
+        fullname,
+        email,
+        phone,
+        "Chưa duyệt",
+        today,
+        occupation,
+        workplace,
+        province,
+        "", // Notified
+        "", // Device_1_ID
+        "", // Device_1_Name
+        "", // Device_2_ID
+        ""  // Device_2_Name
+      ];
 
       await sheets.spreadsheets.values.append({
           spreadsheetId: SPREADSHEET_ID,
-          range,
+          range: 'Accounts',
           valueInputOption: "USER_ENTERED",
           resource: { values: newUser }
       });
+
+      await sendRegistrationEmail(email, username);
 
       res.json({ success: true, message: "Đăng ký thành công! Thông báo phê duyệt tài khoản thành công sẽ được gửi tới email của bạn (có thể cần kiểm tra trong mục Spam)." });
 
@@ -717,6 +752,43 @@ app.post('/api/register', async (req, res) => {
       clearTimeout(timeout);
       logger.error("Lỗi khi đăng ký tài khoản:", error);
       res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+  }
+});
+
+app.post('/api/check-approval', async (req, res) => {
+  try {
+    const sheets = await getSheetsClient();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Accounts'
+    });
+
+    const rows = response.data.values;
+    const headers = rows[0];
+    const usernameIndex = headers.indexOf("Username");
+    const emailIndex = headers.indexOf("Email");
+    const approvedIndex = headers.indexOf("Approved");
+
+    if ([usernameIndex, emailIndex, approvedIndex].includes(-1)) {
+      return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+    }
+
+    const accounts = rows.slice(1);
+    for (let i = 0; i < accounts.length; i++) {
+      const username = accounts[i][usernameIndex];
+      const email = accounts[i][emailIndex];
+      const approved = accounts[i][approvedIndex]?.trim().toLowerCase();
+
+      if (approved === "đã duyệt" && !cache.get(`approved_${username}`)) {
+        await sendApprovalEmail(email, username);
+        cache.set(`approved_${username}`, true);
+      }
+    }
+
+    res.json({ success: true, message: "Kiểm tra và gửi email hoàn tất" });
+  } catch (error) {
+    logger.error("Lỗi khi kiểm tra phê duyệt:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ" });
   }
 });
 
@@ -824,10 +896,12 @@ app.post('/api/reset-password', async (req, res) => {
       const headers = rows[0];
       const usernameIndex = headers.indexOf("Username");
       const passwordIndex = headers.indexOf("Password");
-      const device1Index = headers.indexOf("Device_1");
-      const device2Index = headers.indexOf("Device_2");
+      const device1IdIndex = headers.indexOf("Device_1");
+      const device1NameIndex = headers.indexOf("Device_1_Name");
+      const device2IdIndex = headers.indexOf("Device_2_ID");
+      const device2NameIndex = headers.indexOf("Device_2_Name");
 
-      if (usernameIndex === -1 || passwordIndex === -1 || device1Index === -1 || device2Index === -1) {
+      if ([usernameIndex, passwordIndex, device1IdIndex, device1NameIndex, device2IdIndex, device2NameIndex].includes(-1)) {
           console.log("❌ Không tìm thấy cột cần thiết trong Google Sheets!");
           return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
       }
@@ -846,18 +920,34 @@ app.post('/api/reset-password', async (req, res) => {
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `Accounts!B${userRowIndex + 1}`,
+      range: `Accounts!${String.fromCharCode(65 + passwordIndex)}${userRowIndex + 1}`, // Cột Password
       valueInputOption: "RAW",
       resource: { values: [[hashedNewPassword]] }
     });
 
-      // Xóa Device_1 & Device_2 nhưng giữ nguyên các cột khác
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `Accounts!I${userRowIndex + 1}:J${userRowIndex + 1}`, // Cột I & J chứa thiết bị
-        valueInputOption: "RAW",
-        resource: { values: [["", ""]] }
-      });
+    const startCol = String.fromCharCode(65 + device1IdIndex);
+    const endCol = String.fromCharCode(65 + device2NameIndex);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Accounts!${startCol}${userRowIndex + 1}:${endCol}${userRowIndex + 1}`,
+      valueInputOption: "RAW",
+      resource: { values: [["", "", "", ""]] }
+    });
+
+    // Gửi thông báo đăng xuất qua WebSocket (nếu có)
+    const devices = [
+      { id: rows[userRowIndex][device1IdIndex], name: rows[userRowIndex][device1NameIndex] },
+      { id: rows[userRowIndex][device2IdIndex], name: rows[userRowIndex][device2NameIndex] }
+    ].filter(d => d.id);
+
+    devices.forEach(device => {
+      const clientKey = `${username}_${device.id}`;
+      const oldClient = clients.get(clientKey);
+      if (oldClient && oldClient.readyState === WebSocket.OPEN) {
+        oldClient.send(JSON.stringify({ action: 'logout', message: 'Mật khẩu đã được thay đổi, thiết bị của bạn đã bị đăng xuất!' }));
+        logger.info(`Sent logout notification to ${clientKey}`);
+      }
+    });
 
       return res.json({ success: true, message: "Đổi mật khẩu thành công! Hãy đăng nhập lại." });
 
