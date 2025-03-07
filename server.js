@@ -435,49 +435,63 @@ app.post('/api/check-session', async (req, res) => {
 app.post('/api/logout-device', async (req, res) => {
   logger.info('Request received for /api/logout-device', { body: req.body });
   try {
-      const { username, deviceId, newDeviceId } = req.body;
+    const { username, deviceId, newDeviceId, newDeviceName } = req.body;
 
-      if (!username || !deviceId || !newDeviceId) {
-          return res.status(400).json({ success: false, message: "Thiếu thông tin cần thiết" });
-      }
-
-      const sheets = await getSheetsClient();
-      const range = 'Accounts';
-      const response = await sheets.spreadsheets.values.get({
-          spreadsheetId: SPREADSHEET_ID,
-          range,
-      });
-
-      const rows = response.data.values;
-      const headers = rows[0];
-      const usernameIndex = headers.indexOf("Username");
-      const device1Index = headers.indexOf("Device_1");
-      const device2Index = headers.indexOf("Device_2");
-
-      const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
-      if (userRowIndex === -1) {
-          return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản" });
-      }
-
-      let devices = [rows[userRowIndex][device1Index], rows[userRowIndex][device2Index]].filter(Boolean);
-
-      devices = devices.filter(id => id !== deviceId); // Xóa thiết bị đã chọn
-      devices.push(newDeviceId);
-
-      await sheets.spreadsheets.values.update({
-          spreadsheetId: SPREADSHEET_ID,
-          range: `Accounts!I${userRowIndex + 1}:J${userRowIndex + 1}`,
-          valueInputOption: "RAW",
-          resource: { values: [devices] }
-      });
-
-      return res.json({ success: true, message: "Đăng xuất thành công!" });
-
-    } catch (error) {
-      logger.error('Lỗi khi đăng xuất thiết bị:', error);
-      return res.status(500).json({ success: false, message: "Lỗi máy chủ" });
+    if (!username || !deviceId || !newDeviceId || !newDeviceName) {
+      return res.status(400).json({ success: false, message: "Thiếu thông tin cần thiết" });
     }
-  });
+
+    const sheets = await getSheetsClient();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Accounts',
+    });
+
+    const rows = response.data.values;
+    const headers = rows[0];
+    const usernameIndex = headers.indexOf("Username");
+    const device1IdIndex = headers.indexOf("Device_1_ID");
+    const device1NameIndex = headers.indexOf("Device_1_Name");
+    const device2IdIndex = headers.indexOf("Device_2_ID");
+    const device2NameIndex = headers.indexOf("Device_2_Name");
+
+    if (usernameIndex === -1 || device1IdIndex === -1 || device2IdIndex === -1) {
+      return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+    }
+
+    const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
+    if (userRowIndex === -1) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy tài khoản" });
+    }
+
+    let devices = [
+      { id: rows[userRowIndex][device1IdIndex], name: rows[userRowIndex][device1NameIndex] },
+      { id: rows[userRowIndex][device2IdIndex], name: rows[userRowIndex][device2NameIndex] }
+    ].filter(d => d.id);
+
+    // Xóa thiết bị cũ
+    devices = devices.filter(d => d.id !== deviceId);
+    // Thêm thiết bị mới
+    devices.push({ id: newDeviceId, name: newDeviceName });
+
+    const values = [
+      devices[0]?.id || "", devices[0]?.name || "",
+      devices[1]?.id || "", devices[1]?.name || ""
+    ];
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Accounts!I${userRowIndex + 1}:L${userRowIndex + 1}`, // Cập nhật 4 cột
+      valueInputOption: "RAW",
+      resource: { values: [values] }
+    });
+
+    return res.json({ success: true, message: "Đăng xuất thành công!" });
+  } catch (error) {
+    logger.error('Lỗi khi đăng xuất thiết bị:', error);
+    return res.status(500).json({ success: false, message: "Lỗi máy chủ" });
+  }
+});
 
 app.post('/api/logout-device-from-sheet', async (req, res) => {
     const { username, deviceId } = req.body;
