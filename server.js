@@ -633,6 +633,7 @@ async function loadUsernames() {
 
 // Tải danh sách username khi server khởi động
 loadUsernames();
+setInterval(loadUsernames, 5 * 60 * 1000); // Cập nhật mỗi 5 phút
 
 // API kiểm tra username
 app.post('/api/check-username', async (req, res) => {
@@ -755,6 +756,16 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
+async function sendRegistrationEmail(toEmail, username) {
+  const emailBody = `
+    <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
+    <p>Cảm ơn bạn đã đăng ký tài khoản tại PedMedVN. Tài khoản của bạn đã được tạo thành công và đang chờ phê duyệt từ quản trị viên.</p>
+    <p>Chúng tôi sẽ thông báo qua email này khi tài khoản được phê duyệt.</p>
+    <p>Trân trọng,<br>Đội ngũ PedMedVN</p>
+  `;
+  await sendEmailWithGmailAPI(toEmail, "ĐĂNG KÝ TÀI KHOẢN PEDMEDVN THÀNH CÔNG", emailBody);
+}
+
 app.post('/api/check-approval', async (req, res) => {
   try {
     const sheets = await getSheetsClient();
@@ -791,6 +802,16 @@ app.post('/api/check-approval', async (req, res) => {
     res.status(500).json({ success: false, message: "Lỗi máy chủ" });
   }
 });
+
+async function sendApprovalEmail(toEmail, username) {
+  const emailBody = `
+    <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
+    <p style="font-weight: bold">Tài khoản ${username} của bạn đã được phê duyệt thành công.</p>
+    <p>Bạn có thể đăng nhập tại: <a href="https://pedmed-vnch.web.app">Đăng nhập ngay</a></p>
+    <p>Cảm ơn bạn đã sử dụng dịch vụ của chúng tôi!</p>
+  `;
+  await sendEmailWithGmailAPI(toEmail, "TÀI KHOẢN PEDMEDVN ĐÃ ĐƯỢC PHÊ DUYỆT", emailBody);
+}
 
 const crypto = require("crypto");
 
@@ -885,6 +906,11 @@ app.post('/api/reset-password', async (req, res) => {
       return res.status(400).json({ success: false, message: "Vui lòng nhập đầy đủ thông tin!" });
   }
 
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || authHeader !== `Bearer ${username}`) { // Giả sử token đơn giản
+    return res.status(403).json({ success: false, message: "Không có quyền truy cập!" });
+  }
+
   try {
       const sheets = await getSheetsClient();
       const response = await sheets.spreadsheets.values.get({
@@ -896,7 +922,7 @@ app.post('/api/reset-password', async (req, res) => {
       const headers = rows[0];
       const usernameIndex = headers.indexOf("Username");
       const passwordIndex = headers.indexOf("Password");
-      const device1IdIndex = headers.indexOf("Device_1");
+      const device1IdIndex = headers.indexOf("Device_1_ID");
       const device1NameIndex = headers.indexOf("Device_1_Name");
       const device2IdIndex = headers.indexOf("Device_2_ID");
       const device2NameIndex = headers.indexOf("Device_2_Name");
