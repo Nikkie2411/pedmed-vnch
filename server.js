@@ -11,6 +11,8 @@ const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // Kiểm tra h
 
 const app = express();
 
+const PORT = process.env.PORT || 3000;
+
 // Cấu hình CORS
 app.use(cors({
   origin: "https://pedmed-vnch.web.app",
@@ -872,7 +874,6 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: 'Lỗi máy chủ không xác định' });
 });
 
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server đang chạy tại http://0.0.0.0:${PORT}`);
 });
