@@ -1,4 +1,5 @@
 const express = require('express');
+const WebSocket = require('ws'); // Thêm WebSocket
 const cors = require('cors');
 const { google } = require('googleapis');
 const NodeCache = require('node-cache');
@@ -36,6 +37,40 @@ const logger = winston.createLogger({
     winston.format.json()
   ),
   transports: [new winston.transports.Console()]
+});
+
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server đang chạy tại http://0.0.0.0:${PORT}`);
+});
+
+// Khởi tạo WebSocket server
+const wss = new WebSocket.Server({ server });
+
+// Lưu trữ kết nối WebSocket theo username và deviceId
+const clients = new Map(); // Map<username_deviceId, WebSocket>
+
+wss.on('connection', (ws, req) => {
+  const urlParams = new URLSearchParams(req.url.split('?')[1]);
+  const username = urlParams.get('username');
+  const deviceId = urlParams.get('deviceId');
+
+  if (!username || !deviceId) {
+    ws.close(1008, 'Missing username or deviceId');
+    return;
+  }
+
+  const clientKey = `${username}_${deviceId}`;
+  clients.set(clientKey, ws);
+  logger.info(`WebSocket connected: ${clientKey}`);
+
+  ws.on('close', () => {
+    clients.delete(clientKey);
+    logger.info(`WebSocket disconnected: ${clientKey}`);
+  });
+
+  ws.on('error', (error) => {
+    logger.error(`WebSocket error for ${clientKey}:`, error);
+  });
 });
 
 // Thay Redis bằng Map để lưu OTP
@@ -468,6 +503,17 @@ app.post('/api/logout-device', async (req, res) => {
       { id: rows[userRowIndex][device1IdIndex], name: rows[userRowIndex][device1NameIndex] },
       { id: rows[userRowIndex][device2IdIndex], name: rows[userRowIndex][device2NameIndex] }
     ].filter(d => d.id);
+
+    // Gửi thông báo đến thiết bị cũ trước khi xóa
+    const oldDevice = devices.find(d => d.id === deviceId);
+    if (oldDevice) {
+      const clientKey = `${username}_${deviceId}`;
+      const oldClient = clients.get(clientKey);
+      if (oldClient && oldClient.readyState === WebSocket.OPEN) {
+        oldClient.send(JSON.stringify({ action: 'logout', message: 'Thiết bị của bạn đã bị đăng xuất bởi thiết bị mới!' }));
+        logger.info(`Sent logout notification to ${clientKey}`);
+      }
+    }
 
     // Xóa thiết bị cũ
     devices = devices.filter(d => d.id !== deviceId);
