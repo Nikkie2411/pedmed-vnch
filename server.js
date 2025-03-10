@@ -22,13 +22,12 @@ app.use(cors({
 }));
 
 // Xử lý tất cả yêu cầu OPTIONS một cách rõ ràng
-app.options('*', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.sendStatus(204); // No Content
-});
+app.options('*', cors({
+  origin: "https://pedmed-vnch.web.app",
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true
+}));
 
 app.use(express.json());
 
@@ -986,6 +985,9 @@ app.post('/api/reset-password', async (req, res) => {
 // Middleware xử lý lỗi
 app.use((err, req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   logger.error('Unhandled error', { error: err.stack });
   res.status(500).json({ success: false, message: 'Lỗi máy chủ không xác định' });
 });
