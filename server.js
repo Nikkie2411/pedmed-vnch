@@ -124,15 +124,17 @@ async function startServer() {
       ? process.env.ALLOWED_ORIGINS.split(',')
       : ['https://pedmed-vnch.web.app', 'http://localhost:3000'];
 
+    app.options('*', cors()); // Xử lý tất cả request OPTIONS
     app.use(cors({
-      origin: (origin, callback) => {
-        console.log('Request Origin:', origin); // Log để kiểm tra
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
-        }
-      },
+      //origin: (origin, callback) => {
+      //  console.log('Request Origin:', origin); // Log để kiểm tra
+      //  if (!origin || allowedOrigins.includes(origin)) {
+      //    callback(null, true);
+      //  } else {
+      //    callback(new Error('Not allowed by CORS'));
+      //  }
+      //},
+      origin: '*', // Cho phép tất cả origin
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
       credentials: true,
