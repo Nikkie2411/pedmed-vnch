@@ -11,25 +11,63 @@ const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // Kiểm tra h
 
 const app = express();
 
+// Khai báo biến toàn cục cho Sheets client
+let sheetsClient;
+
+// Hàm khởi tạo Google Sheets client
+async function initializeSheetsClient(retries = 3, delay = 5000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+  try {
+    const auth = new google.auth.GoogleAuth({
+      credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
+    const authClient = await auth.getClient();
+    sheetsClient = google.sheets({ version: 'v4', auth: authClient });
+    logger.info('Google Sheets client initialized successfully');
+    return; // Thành công thì thoát
+  } catch (error) {
+    logger.error(`Attempt ${attempt} failed to initialize Google Sheets client:`, error);
+      if (attempt === retries) {
+        logger.error('All attempts failed. Server cannot start.');
+        throw error; // Ném lỗi để middleware xử lý
+      }
+      await new Promise(resolve => setTimeout(resolve, delay)); // Đợi trước khi thử lại
+    }
+  }
+}
+
+// Gọi khởi tạo khi server bắt đầu
+initializeSheetsClient().catch((err) => {
+  logger.error('Server startup failed:', err);
+  process.exit(1);
+});
+
 const PORT = process.env.PORT || 3000;
 
 // Cấu hình CORS
-app.use(cors({
-  origin: "https://pedmed-vnch.web.app",
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true // Nếu cần gửi cookie hoặc auth token
-}));
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['https://pedmed-vnch.web.app', 'http://localhost:3000'];
 
-// Xử lý tất cả yêu cầu OPTIONS một cách rõ ràng
-app.options('*', cors({
-  origin: "https://pedmed-vnch.web.app",
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true
-}));
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 204 // Trả về 204 cho OPTIONS
+};
 
-app.use(express.json());
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Xử lý preflight cho tất cả route
+
+app.use(express.json({ limit: '10kb' })); // Giới hạn 10KB
 
 const logger = winston.createLogger({
   level: 'info',
@@ -61,6 +99,13 @@ wss.on('connection', (ws, req) => {
   }
 
   const clientKey = `${username}_${deviceId}`;
+  // Đóng kết nối cũ nếu tồn tại
+  const existingClient = clients.get(clientKey);
+  if (existingClient && existingClient.readyState === WebSocket.OPEN) {
+    existingClient.close(1000, 'New connection established');
+    logger.info(`Closed old WebSocket connection for ${clientKey}`);
+  }
+
   clients.set(clientKey, ws);
   logger.info(`WebSocket connected: ${clientKey}`);
 
@@ -79,9 +124,10 @@ const otpStore = new Map(); // Lưu trữ { username: { code, expiry } }
 
 // Hàm đặt OTP với TTL
 const setOtp = (username, otpCode, ttlInSeconds) => {
+  const hashedOtp = bcrypt.hashSync(otpCode, 10); // Mã hóa OTP
   const expiry = Date.now() + ttlInSeconds * 1000;
-  otpStore.set(username, { code: otpCode, expiry });
-  logger.info(`Stored OTP for ${username}: ${otpCode}, expires at ${new Date(expiry).toISOString()}`);
+  otpStore.set(username, { code: hashedOtp, expiry });
+  logger.info(`Stored OTP for ${username}, expires at ${new Date(expiry).toISOString()}`);
   
   // Tự động xóa sau khi hết hạn
   setTimeout(() => {
@@ -93,13 +139,13 @@ const setOtp = (username, otpCode, ttlInSeconds) => {
 };
 
 // Hàm lấy và kiểm tra OTP
-const getOtp = (username) => {
+const getOtp = async (username, inputOtp) => {
   const otpData = otpStore.get(username);
   if (!otpData || Date.now() > otpData.expiry) {
     otpStore.delete(username); // Xóa nếu hết hạn
-    return null;
+    return false;
   }
-  return otpData.code;
+  return await bcrypt.compare(inputOtp, otpData.code); // So sánh mã hóa
 };
 
 // Hàm xóa OTP
@@ -116,17 +162,6 @@ const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
-
-async function getSheetsClient() {
-  logger.info('Initializing Google Sheets client');
-  try {
-    const authClient = await auth.getClient();
-    return google.sheets({ version: 'v4', auth: authClient });
-  } catch (error) {
-    logger.error('Failed to initialize Google Sheets client:', error);
-    throw error;
-  }
-}
 
 async function getAccessToken() {
   logger.info("🔄 Đang lấy Access Token...");
@@ -168,9 +203,9 @@ async function getAccessToken() {
 }
 
 // 📧 Hàm gửi email bằng Gmail API
-async function sendEmailWithGmailAPI(toEmail, subject, body) {
+async function sendEmailWithGmailAPI(toEmail, subject, body, retries = 3, delay = 5000) {
   logger.info(`📧 Chuẩn bị gửi email đến: ${toEmail}`);
-
+  for (let attempt = 1; attempt <= retries; attempt++) {
     try {
         const accessToken = await getAccessToken();
         const url = "https://www.googleapis.com/gmail/v1/users/me/messages/send";
@@ -207,9 +242,13 @@ async function sendEmailWithGmailAPI(toEmail, subject, body) {
         logger.info("✅ Email đã gửi thành công:", result);
         return true; // Thành công
     } catch (error) {
-        logger.error("❌ Lỗi khi gửi email:", error.message);
-        throw error; // Ném lỗi để endpoint bắt
+      logger.error(`Attempt ${attempt} failed to send email to ${toEmail}:`, error.message);
+      if (attempt === retries) {
+        throw new Error(`Không thể gửi email sau ${retries} lần thử: ${error.message}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
+  }
 }
 
 // API lấy dữ liệu từ Google Sheets
@@ -220,17 +259,25 @@ app.get('/api/drugs', async (req, res) => {
   const page = isNaN(parseInt(pageRaw)) || parseInt(pageRaw) < 1 ? 1 : parseInt(pageRaw);
   const limit = isNaN(parseInt(limitRaw)) || parseInt(limitRaw) < 1 ? 10 : parseInt(limitRaw);
 
-  const cacheKey = 'all_drugs'; // Key cố định cho toàn bộ dữ liệu
+  const cacheKey = query ? `drugs_${query}_${page}_${limit}` : 'all_drugs';
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000); // 10 giây
+  // Kiểm tra xem client đã sẵn sàng chưa
+  if (!sheetsClient) {
+    return res.status(503).json({ error: 'Google Sheets client not available' });
+  }
+
   try {
     // Kiểm tra cache trước
     let drugs = cache.get(cacheKey);
     if (!drugs) {
       console.log('Cache miss - Lấy dữ liệu từ Google Sheets');
-      const sheets = await getSheetsClient();
-      const response = await sheets.spreadsheets.values.get({
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+      throw new Error('Request to Google Sheets timed out after 10 seconds');
+    }, 10000);
+
+      const response = await sheetsClient.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: 'pedmedvnch',
         signal: controller.signal
@@ -269,11 +316,10 @@ app.get('/api/drugs', async (req, res) => {
       const filteredDrugs = drugs.filter(drug =>
         drug['Hoạt chất']?.toLowerCase().includes(query.toLowerCase()));
         const start = (page - 1) * limit;
-        const end = start + parseInt(limit);
         return res.json({
           total: filteredDrugs.length,
-          page: parseInt(page),
-          data: filteredDrugs.slice(start, end)
+          page,
+          data: filteredDrugs.slice(start, start + parseInt(limit))
         });
     }
 
@@ -287,7 +333,12 @@ app.get('/api/drugs', async (req, res) => {
 });
 
 app.post('/api/drugs/invalidate-cache', async (req, res) => {
-  cache.del('all_drugs'); // Xóa cache với node-cache
+  cache.del('all_drugs');
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ action: 'cache_invalidated' }));
+    }
+  });
   res.json({ success: true, message: 'Cache đã được làm mới' });
 });
 
@@ -309,8 +360,7 @@ const loginLimiter = rateLimit({
 });
 
 // API kiểm tra đăng nhập
-app.post('/api/login', loginLimiter, async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
+app.post('/api/login', loginLimiter, async (req, res, next) => {
   const { username, password, deviceId, deviceName } = req.body;
   logger.info('Login request received', { username, deviceId, deviceName });
 
@@ -318,11 +368,14 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     return res.status(400).json({ success: false, message: "Thiếu thông tin đăng nhập!" });
   }
 
+  if (!sheetsClient) {
+    return res.status(503).json({ success: false, message: 'Dịch vụ tạm thời không khả dụng' });
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
-    const sheets = await getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
+    const response = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts',
       signal: controller.signal
@@ -399,12 +452,12 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   } catch (error) {
     clearTimeout(timeout);
     logger.error('Lỗi khi kiểm tra tài khoản:', error);
-    return res.status(500).json({ success: false, message: 'Lỗi máy chủ.' });
+    next(error);
   }
 });
 
 //API kiểm tra trạng thái đã duyệt
-app.post('/api/check-session', async (req, res) => {
+app.post('/api/check-session', async (req, res, next) => {
   logger.info('Request received for /api/check-session', { body: req.body });
   const { username, deviceId } = req.body;
 
@@ -413,10 +466,13 @@ app.post('/api/check-session', async (req, res) => {
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản hoặc thiết bị!" });
   }
 
+  if (!sheetsClient) {
+    return res.status(503).json({ error: 'Service unavailable' });
+  }
+
   try {
     console.log(`📌 Kiểm tra trạng thái tài khoản của: ${username}, DeviceID: ${deviceId}`);
-    const sheets = await getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
+    const response = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts',
     });
@@ -466,11 +522,11 @@ app.post('/api/check-session', async (req, res) => {
 
   } catch (error) {
     logger.error("❌ Lỗi khi kiểm tra trạng thái tài khoản:", error);
-    res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+    next(error);
   }
 });
 
-app.post('/api/logout-device', async (req, res) => {
+app.post('/api/logout-device', async (req, res, next) => {
   logger.info('Request received for /api/logout-device', { body: req.body });
   try {
     const { username, deviceId, newDeviceId, newDeviceName } = req.body;
@@ -479,8 +535,11 @@ app.post('/api/logout-device', async (req, res) => {
       return res.status(400).json({ success: false, message: "Thiếu thông tin cần thiết" });
     }
 
-    const sheets = await getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
+    if (!sheetsClient) {
+      return res.status(503).json({ error: 'Service unavailable' });
+    }
+
+    const response = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts',
     });
@@ -519,7 +578,7 @@ app.post('/api/logout-device', async (req, res) => {
     }
 
     // Xóa thiết bị cũ
-    devices = devices.filter(d => d.id !== deviceId);
+    devices = devices.filter(d => d.id !== deviceId && d.id !== newDeviceId);
     // Thêm thiết bị mới
     devices.push({ id: newDeviceId, name: newDeviceName });
 
@@ -540,15 +599,17 @@ app.post('/api/logout-device', async (req, res) => {
     return res.json({ success: true, message: "Đăng xuất thành công!" });
   } catch (error) {
     logger.error('Lỗi khi đăng xuất thiết bị:', error);
-    return res.status(500).json({ success: false, message: "Lỗi máy chủ" });
+    next(error);
   }
 });
 
 app.post('/api/logout-device-from-sheet', async (req, res) => {
     const { username, deviceId } = req.body;
-  
-    const sheets = await getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
+    if (!sheetsClient) {
+      return res.status(503).json({ error: 'Service unavailable' });
+    }
+
+    const response = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts',
     });
@@ -602,9 +663,8 @@ let cachedUsernames = [];
 
 async function loadUsernames() {
     try {
-        const sheets = await getSheetsClient();
         const range = 'Accounts';
-        const response = await sheets.spreadsheets.values.get({
+        const response = await sheetsClient.spreadsheets.values.get({
             spreadsheetId: SPREADSHEET_ID,
             range,
         });
@@ -635,7 +695,7 @@ loadUsernames();
 setInterval(loadUsernames, 5 * 60 * 1000); // Cập nhật mỗi 5 phút
 
 // API kiểm tra username
-app.post('/api/check-username', async (req, res) => {
+app.post('/api/check-username', async (req, res, next) => {
     try {
         const { username } = req.body;
         if (!username) {
@@ -647,7 +707,7 @@ app.post('/api/check-username', async (req, res) => {
         return res.json({ exists: isUsernameTaken });
     } catch (error) {
         console.error("❌ Lỗi khi kiểm tra username:", error);
-        return res.status(500).json({ exists: false, message: "Lỗi máy chủ!" });
+        next(error);
     }
 });
 
@@ -663,9 +723,13 @@ function isValidPhone(phone) {
 }
 
 //API đăng ký user
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', async (req, res, next) => {
   logger.info('Request received for /api/register', { body: req.body });
   const { username, password, fullname, email, phone, occupation, workplace, province } = req.body;
+
+  if (username.length > 50 || password.length > 100 || email.length > 255 || phone.length > 15) {
+    return res.status(400).json({ success: false, message: "Dữ liệu đầu vào vượt quá giới hạn độ dài!" });
+  }
 
   if (!username || !password || !fullname || !email || !phone || !occupation || !workplace || !province) {
       return res.status(400).json({ success: false, message: "Vui lòng điền đầy đủ thông tin!" });
@@ -679,11 +743,14 @@ app.post('/api/register', async (req, res) => {
     return res.status(400).json({ success: false, message: "Số điện thoại không hợp lệ!" });
   }
 
+  if (!sheetsClient) {
+    return res.status(503).json({ error: 'Service unavailable' });
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
-      const sheets = await getSheetsClient();
-      const response = await sheets.spreadsheets.values.get({
+      const response = await sheetsClient.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
           range: 'Accounts',
           signal: controller.signal
@@ -751,7 +818,7 @@ app.post('/api/register', async (req, res) => {
   } catch (error) {
       clearTimeout(timeout);
       logger.error("Lỗi khi đăng ký tài khoản:", error);
-      res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+      next(error);
   }
 });
 
@@ -765,10 +832,13 @@ async function sendRegistrationEmail(toEmail, username) {
   await sendEmailWithGmailAPI(toEmail, "ĐĂNG KÝ TÀI KHOẢN PEDMEDVN THÀNH CÔNG", emailBody);
 }
 
-app.post('/api/check-approval', async (req, res) => {
+app.post('/api/check-approval', async (req, res, next) => {
+  if (!sheetsClient) {
+    return res.status(503).json({ error: 'Service unavailable' });
+  }
+
   try {
-    const sheets = await getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
+    const response = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts'
     });
@@ -798,7 +868,7 @@ app.post('/api/check-approval', async (req, res) => {
     res.json({ success: true, message: "Kiểm tra và gửi email hoàn tất" });
   } catch (error) {
     logger.error("Lỗi khi kiểm tra phê duyệt:", error);
-    res.status(500).json({ success: false, message: "Lỗi máy chủ" });
+    next(error);
   }
 });
 
@@ -814,9 +884,15 @@ async function sendApprovalEmail(toEmail, username) {
 
 const crypto = require("crypto");
 
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 phút
+  max: 5, // 5 lần thử
+  message: { success: false, message: "Quá nhiều lần thử gửi OTP. Vui lòng đợi 15 phút!" },
+  keyGenerator: (req) => req.body.username || 'unknown'
+});
+
 //API gửi OTP đến email user
-app.post('/api/send-otp', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
+app.post('/api/send-otp', otpLimiter, async (req, res, next) => {
   logger.info('Request received for /api/send-otp', { body: req.body });
 
   const { username } = req.body;
@@ -824,12 +900,15 @@ app.post('/api/send-otp', async (req, res) => {
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
   }
 
+  if (!sheetsClient) {
+    return res.status(503).json({ error: 'Service unavailable' });
+  }
+
   try {
     logger.info(`Fetching user data for ${username}`);
-    const sheets = await getSheetsClient();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
-    const response = await sheets.spreadsheets.values.get({
+    const response = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts',
       signal: controller.signal
@@ -870,13 +949,12 @@ app.post('/api/send-otp', async (req, res) => {
     return res.json({ success: true, message: "Mã xác nhận đã được gửi đến email của bạn!" });
   } catch (error) {
     logger.error("❌ Lỗi máy chủ khi gửi OTP:", error);
-    return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+    next(error);
   }
 });
 
 //API xác thực OTP
-app.post('/api/verify-otp', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
+app.post('/api/verify-otp', async (req, res, next) => {
   logger.info('Request received for /api/verify-otp', { body: req.body });
 
   const { username, otp } = req.body;
@@ -892,17 +970,21 @@ app.post('/api/verify-otp', async (req, res) => {
     return res.json({ success: true, message: "Xác minh thành công, hãy đặt lại mật khẩu mới!" });
   } catch (error) {
     logger.error("❌ Lỗi khi xác minh OTP:", error);
-    return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+    next(error);
   }
 });
 
 //API cập nhật mật khẩu mới
-app.post('/api/reset-password', async (req, res) => {
+app.post('/api/reset-password', async (req, res, next) => {
   logger.info('Request received for /api/reset-password', { body: req.body });
   const { username, newPassword } = req.body;
 
   if (!username || !newPassword) {
       return res.status(400).json({ success: false, message: "Vui lòng nhập đầy đủ thông tin!" });
+  }
+
+  if (!sheetsClient) {
+    return res.status(503).json({ error: 'Service unavailable' });
   }
 
   const authHeader = req.headers['authorization'];
@@ -911,8 +993,7 @@ app.post('/api/reset-password', async (req, res) => {
   }
 
   try {
-      const sheets = await getSheetsClient();
-      const response = await sheets.spreadsheets.values.get({
+      const response = await sheetsClient.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
           range: 'Accounts',
       });
@@ -978,16 +1059,15 @@ app.post('/api/reset-password', async (req, res) => {
 
   } catch (error) {
       logger.error("❌ Lỗi khi cập nhật mật khẩu:", error);
-      return res.status(500).json({ success: false, message: "Lỗi máy chủ!" });
+      next(error);
   }
 });
 
 // Middleware xử lý lỗi
 app.use((err, req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://pedmed-vnch.web.app');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
   logger.error('Unhandled error', { error: err.stack });
-  res.status(500).json({ success: false, message: 'Lỗi máy chủ không xác định' });
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Lỗi máy chủ không xác định'
+  });
 });
