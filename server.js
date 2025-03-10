@@ -110,6 +110,173 @@ const loginLimiter = rateLimit({
   }
 });
 
+// Hàm đặt OTP với TTL
+const setOtp = (username, otpCode, ttlInSeconds) => {
+  const hashedOtp = bcrypt.hashSync(otpCode, 10); // Mã hóa OTP
+  const expiry = Date.now() + ttlInSeconds * 1000;
+  otpStore.set(username, { code: hashedOtp, expiry });
+  logger.info(`Stored OTP for ${username}, expires at ${new Date(expiry).toISOString()}`);
+  
+  // Tự động xóa sau khi hết hạn
+  setTimeout(() => {
+    if (otpStore.get(username)?.expiry === expiry) {
+      otpStore.delete(username);
+      logger.info(`OTP for ${username} expired and removed`);
+    }
+  }, ttlInSeconds * 1000);
+};
+
+// Hàm lấy và kiểm tra OTP
+const getOtp = async (username, inputOtp) => {
+  const otpData = otpStore.get(username);
+  if (!otpData || Date.now() > otpData.expiry) {
+    otpStore.delete(username); // Xóa nếu hết hạn
+    return false;
+  }
+  return await bcrypt.compare(inputOtp, otpData.code); // So sánh mã hóa
+};
+
+// Hàm xóa OTP
+const deleteOtp = (username) => {
+  otpStore.delete(username);
+  logger.info(`OTP for ${username} deleted`);
+};
+
+async function getAccessToken() {
+  logger.info("🔄 Đang lấy Access Token...");
+
+  try {
+      const refreshToken = process.env.REFRESH_TOKEN;
+      const clientId = process.env.CLIENT_ID;
+      const clientSecret = process.env.CLIENT_SECRET;
+
+      if (!refreshToken || !clientId || !clientSecret) {
+          throw new Error("Thiếu thông tin OAuth (REFRESH_TOKEN, CLIENT_ID, CLIENT_SECRET) trong môi trường!");
+      }
+
+      const tokenUrl = "https://oauth2.googleapis.com/token";
+      const payload = new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: refreshToken,
+          grant_type: "refresh_token"
+      });
+
+      const response = await fetch(tokenUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: payload
+      });
+
+      const json = await response.json();
+      if (!response.ok) {
+          throw new Error(`Lỗi khi lấy Access Token: ${json.error}`);
+      }
+
+      logger.info("✅ Access Token lấy thành công!");
+      return json.access_token;
+  } catch (error) {
+      logger.error("❌ Lỗi khi lấy Access Token:", error.message);
+      throw error;
+  }
+}
+
+// 📧 Hàm gửi email bằng Gmail API
+async function sendEmailWithGmailAPI(toEmail, subject, body, retries = 3, delay = 5000) {
+  logger.info(`📧 Chuẩn bị gửi email đến: ${toEmail}`);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+        const accessToken = await getAccessToken();
+        const url = "https://www.googleapis.com/gmail/v1/users/me/messages/send";
+        const rawEmail = [
+            "MIME-Version: 1.0",
+            "Content-Type: text/html; charset=UTF-8",
+            `From: PedMedVN <pedmedvn.nch@gmail.com>`,
+            `To: <${toEmail}>`,
+            `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
+            "",
+            body
+        ].join("\r\n");
+
+        const encodedMessage = Buffer.from(rawEmail)
+            .toString('base64')
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+        
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${accessToken}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ raw: encodedMessage })
+        });
+
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(`Lỗi gửi email: ${result.error.message}`);
+        }
+
+        logger.info("✅ Email đã gửi thành công:", result);
+        return true; // Thành công
+    } catch (error) {
+      logger.error(`Attempt ${attempt} failed to send email to ${toEmail}:`, error.message);
+      if (attempt === retries) {
+        throw new Error(`Không thể gửi email sau ${retries} lần thử: ${error.message}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+// Hàm kiểm tra định dạng email hợp lệ
+function isValidEmail(email) {
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailPattern.test(email);
+}
+
+function isValidPhone(phone) {
+  const phonePattern = /^(0[35789])[0-9]{8}$/; // Định dạng VN: 09x, 08x, 07x, 03x, 05x + 8 số
+  return phonePattern.test(phone);
+}
+
+async function sendRegistrationEmail(toEmail, username) {
+  try {
+  const emailBody = `
+    <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
+    <p>Cảm ơn bạn đã đăng ký tài khoản tại PedMedVN. Tài khoản của bạn đã được tạo thành công và đang chờ phê duyệt từ quản trị viên.</p>
+    <p>Chúng tôi sẽ thông báo qua email này khi tài khoản được phê duyệt.</p>
+    <p>Trân trọng,<br>Đội ngũ PedMedVN</p>
+  `;
+  await sendEmailWithGmailAPI(toEmail, "ĐĂNG KÝ TÀI KHOẢN PEDMEDVN THÀNH CÔNG", emailBody);
+} catch (error) {
+  logger.error(`Failed to send registration email to ${toEmail}:`, error);
+  // Có thể ghi log hoặc xử lý thêm, nhưng không crash server
+}
+}
+
+async function sendApprovalEmail(toEmail, username) {
+  const emailBody = `
+    <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
+    <p style="font-weight: bold">Tài khoản ${username} của bạn đã được phê duyệt thành công.</p>
+    <p>Bạn có thể đăng nhập tại: <a href="https://pedmed-vnch.web.app">Đăng nhập ngay</a></p>
+    <p>Cảm ơn bạn đã sử dụng dịch vụ của chúng tôi!</p>
+  `;
+  await sendEmailWithGmailAPI(toEmail, "TÀI KHOẢN PEDMEDVN ĐÃ ĐƯỢC PHÊ DUYỆT", emailBody);
+}
+
+const crypto = require("crypto");
+
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 phút
+  max: 5, // 5 lần thử
+  message: { success: false, message: "Quá nhiều lần thử gửi OTP. Vui lòng đợi 15 phút!" },
+  keyGenerator: (req) => {
+    return req.body && req.body.username ? req.body.username : 'unknown';
+  }
+});
+
 // Hàm khởi động server
 async function startServer() {
   try {
@@ -336,14 +503,6 @@ app.get('/api/drugs', ensureSheetsClient, async (req, res) => {
   }
 });
 
-    // Tải danh sách username ban đầu và định kỳ
-    setInterval(loadUsernames, 5 * 60 * 1000);
-  } catch (error) {
-    logger.error('Server startup failed:', error);
-    process.exit(1);
-  }
-}
-
 app.post('/api/drugs/invalidate-cache', ensureSheetsClient, async (req, res) => {
   cache.del('all_drugs');
   if (wss) {
@@ -355,126 +514,6 @@ app.post('/api/drugs/invalidate-cache', ensureSheetsClient, async (req, res) => 
   }
   res.json({ success: true, message: 'Cache đã được làm mới' });
 });
-
-// Hàm đặt OTP với TTL
-const setOtp = (username, otpCode, ttlInSeconds) => {
-  const hashedOtp = bcrypt.hashSync(otpCode, 10); // Mã hóa OTP
-  const expiry = Date.now() + ttlInSeconds * 1000;
-  otpStore.set(username, { code: hashedOtp, expiry });
-  logger.info(`Stored OTP for ${username}, expires at ${new Date(expiry).toISOString()}`);
-  
-  // Tự động xóa sau khi hết hạn
-  setTimeout(() => {
-    if (otpStore.get(username)?.expiry === expiry) {
-      otpStore.delete(username);
-      logger.info(`OTP for ${username} expired and removed`);
-    }
-  }, ttlInSeconds * 1000);
-};
-
-// Hàm lấy và kiểm tra OTP
-const getOtp = async (username, inputOtp) => {
-  const otpData = otpStore.get(username);
-  if (!otpData || Date.now() > otpData.expiry) {
-    otpStore.delete(username); // Xóa nếu hết hạn
-    return false;
-  }
-  return await bcrypt.compare(inputOtp, otpData.code); // So sánh mã hóa
-};
-
-// Hàm xóa OTP
-const deleteOtp = (username) => {
-  otpStore.delete(username);
-  logger.info(`OTP for ${username} deleted`);
-};
-
-async function getAccessToken() {
-  logger.info("🔄 Đang lấy Access Token...");
-
-  try {
-      const refreshToken = process.env.REFRESH_TOKEN;
-      const clientId = process.env.CLIENT_ID;
-      const clientSecret = process.env.CLIENT_SECRET;
-
-      if (!refreshToken || !clientId || !clientSecret) {
-          throw new Error("Thiếu thông tin OAuth (REFRESH_TOKEN, CLIENT_ID, CLIENT_SECRET) trong môi trường!");
-      }
-
-      const tokenUrl = "https://oauth2.googleapis.com/token";
-      const payload = new URLSearchParams({
-          client_id: clientId,
-          client_secret: clientSecret,
-          refresh_token: refreshToken,
-          grant_type: "refresh_token"
-      });
-
-      const response = await fetch(tokenUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: payload
-      });
-
-      const json = await response.json();
-      if (!response.ok) {
-          throw new Error(`Lỗi khi lấy Access Token: ${json.error}`);
-      }
-
-      logger.info("✅ Access Token lấy thành công!");
-      return json.access_token;
-  } catch (error) {
-      logger.error("❌ Lỗi khi lấy Access Token:", error.message);
-      throw error;
-  }
-}
-
-// 📧 Hàm gửi email bằng Gmail API
-async function sendEmailWithGmailAPI(toEmail, subject, body, retries = 3, delay = 5000) {
-  logger.info(`📧 Chuẩn bị gửi email đến: ${toEmail}`);
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-        const accessToken = await getAccessToken();
-        const url = "https://www.googleapis.com/gmail/v1/users/me/messages/send";
-        const rawEmail = [
-            "MIME-Version: 1.0",
-            "Content-Type: text/html; charset=UTF-8",
-            `From: PedMedVN <pedmedvn.nch@gmail.com>`,
-            `To: <${toEmail}>`,
-            `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
-            "",
-            body
-        ].join("\r\n");
-
-        const encodedMessage = Buffer.from(rawEmail)
-            .toString('base64')
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_')
-            .replace(/=+$/, '');
-        
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${accessToken}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ raw: encodedMessage })
-        });
-
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(`Lỗi gửi email: ${result.error.message}`);
-        }
-
-        logger.info("✅ Email đã gửi thành công:", result);
-        return true; // Thành công
-    } catch (error) {
-      logger.error(`Attempt ${attempt} failed to send email to ${toEmail}:`, error.message);
-      if (attempt === retries) {
-        throw new Error(`Không thể gửi email sau ${retries} lần thử: ${error.message}`);
-      }
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-}
 
 //API kiểm tra trạng thái đã duyệt
 app.post('/api/check-session', async (req, res, next) => {
@@ -690,17 +729,6 @@ app.post('/api/check-username', async (req, res, next) => {
     }
 });
 
-// Hàm kiểm tra định dạng email hợp lệ
-function isValidEmail(email) {
-  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailPattern.test(email);
-}
-
-function isValidPhone(phone) {
-  const phonePattern = /^(0[35789])[0-9]{8}$/; // Định dạng VN: 09x, 08x, 07x, 03x, 05x + 8 số
-  return phonePattern.test(phone);
-}
-
 //API đăng ký user
 app.post('/api/register', async (req, res, next) => {
   logger.info('Request received for /api/register', { body: req.body });
@@ -797,21 +825,6 @@ app.post('/api/register', async (req, res, next) => {
   }
 });
 
-async function sendRegistrationEmail(toEmail, username) {
-  try {
-  const emailBody = `
-    <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
-    <p>Cảm ơn bạn đã đăng ký tài khoản tại PedMedVN. Tài khoản của bạn đã được tạo thành công và đang chờ phê duyệt từ quản trị viên.</p>
-    <p>Chúng tôi sẽ thông báo qua email này khi tài khoản được phê duyệt.</p>
-    <p>Trân trọng,<br>Đội ngũ PedMedVN</p>
-  `;
-  await sendEmailWithGmailAPI(toEmail, "ĐĂNG KÝ TÀI KHOẢN PEDMEDVN THÀNH CÔNG", emailBody);
-} catch (error) {
-  logger.error(`Failed to send registration email to ${toEmail}:`, error);
-  // Có thể ghi log hoặc xử lý thêm, nhưng không crash server
-}
-}
-
 app.post('/api/check-approval', async (req, res, next) => {
 
   try {
@@ -847,25 +860,6 @@ app.post('/api/check-approval', async (req, res, next) => {
     logger.error("Lỗi khi kiểm tra phê duyệt:", error);
     next(error);
   }
-});
-
-async function sendApprovalEmail(toEmail, username) {
-  const emailBody = `
-    <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
-    <p style="font-weight: bold">Tài khoản ${username} của bạn đã được phê duyệt thành công.</p>
-    <p>Bạn có thể đăng nhập tại: <a href="https://pedmed-vnch.web.app">Đăng nhập ngay</a></p>
-    <p>Cảm ơn bạn đã sử dụng dịch vụ của chúng tôi!</p>
-  `;
-  await sendEmailWithGmailAPI(toEmail, "TÀI KHOẢN PEDMEDVN ĐÃ ĐƯỢC PHÊ DUYỆT", emailBody);
-}
-
-const crypto = require("crypto");
-
-const otpLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 phút
-  max: 5, // 5 lần thử
-  message: { success: false, message: "Quá nhiều lần thử gửi OTP. Vui lòng đợi 15 phút!" },
-  keyGenerator: (req) => req.body.username || 'unknown'
 });
 
 //API gửi OTP đến email user
@@ -1031,6 +1025,14 @@ app.post('/api/reset-password', async (req, res, next) => {
       next(error);
   }
 });
+
+    // Tải danh sách username ban đầu và định kỳ
+    setInterval(loadUsernames, 5 * 60 * 1000);
+  } catch (error) {
+    logger.error('Server startup failed:', error);
+    process.exit(1);
+  }
+}
 
 // Gọi hàm khởi động
 startServer();
