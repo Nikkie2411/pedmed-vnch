@@ -5,14 +5,38 @@ const { google } = require('googleapis');
 const NodeCache = require('node-cache');
 const winston = require('winston');
 const bcrypt = require('bcrypt');
+const rateLimit = require('express-rate-limit');
 
 // Khởi tạo cache với TTL (time-to-live) là 1 giờ (3600 giây)
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // Kiểm tra hết hạn mỗi 2 phút
-
 const app = express();
-
-// Khai báo biến toàn cục cho Sheets client
 let sheetsClient;
+let wss;
+
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [new winston.transports.Console()]
+});
+
+// ID của Google Sheet
+const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
+// Lưu trữ kết nối WebSocket theo username và deviceId
+const clients = new Map(); // Map<username_deviceId, WebSocket>
+let cachedUsernames = [];
+const otpStore = new Map(); // Lưu trữ { username: { code, expiry } }
+
+// Middleware kiểm tra sheetsClient
+const ensureSheetsClient = (req, res, next) => {
+  if (!sheetsClient) {
+    return res.status(503).json({ success: false, message: 'Service unavailable, server not fully initialized' });
+  }
+  next();
+};
+app.use(ensureSheetsClient);
 
 // Hàm khởi tạo Google Sheets client
 async function initializeSheetsClient(retries = 3, delay = 5000) {
@@ -37,90 +61,309 @@ async function initializeSheetsClient(retries = 3, delay = 5000) {
   }
 }
 
-// Gọi khởi tạo khi server bắt đầu
-initializeSheetsClient().catch((err) => {
-  logger.error('Server startup failed:', err);
-  process.exit(1);
-});
+let isLoadingUsernames = false;
+async function loadUsernames() {
+  if (isLoadingUsernames) return;
+  isLoadingUsernames = true;
+  try{
+        const range = 'Accounts';
+        const response = await sheetsClient.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range,
+        });
 
-const PORT = process.env.PORT || 3000;
+        if (!response || !response.data || !response.data.values) {
+            console.error("⚠️ Không thể tải danh sách username.");
+            return;
+        }
 
-// Cấu hình CORS
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',')
-  : ['https://pedmed-vnch.web.app', 'http://localhost:3000'];
+        const rows = response.data.values;
+        const headers = rows[0] || [];
+        const usernameIndex = headers.indexOf("Username");
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+        if (usernameIndex === -1) {
+            console.error("⚠️ Không tìm thấy cột Username.");
+            return;
+        }
+
+        cachedUsernames = rows.slice(1).map(row => row[usernameIndex]?.trim().toLowerCase());
+        console.log("✅ Tải danh sách username thành công.");
+    } catch (error) {
+        logger.error("❌ Lỗi khi tải danh sách username:", error);
+    } finally {
+      isLoadingUsernames = false;
     }
+}
+
+// Hàm khởi động server
+async function startServer() {
+  try {
+    // Chờ khởi tạo Google Sheets client
+    await initializeSheetsClient();
+
+    // Sau khi sheetsClient sẵn sàng, tải danh sách username
+    await loadUsernames();
+
+    // Cấu hình CORS và middleware khác
+    const allowedOrigins = process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(',')
+      : ['https://pedmed-vnch.web.app', 'http://localhost:3000'];
+
+    app.use(cors({
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+      credentials: true,
+      optionsSuccessStatus: 204
+    }));
+    app.use(express.json({ limit: '10kb' }));
+
+    // Khởi tạo WebSocket server
+    const PORT = process.env.PORT || 3000;
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      logger.info(`Server đang chạy tại http://0.0.0.0:${PORT}`);
+    });
+    wss = new WebSocket.Server({ server });
+    wss.on('connection', (ws, req) => {
+      const urlParams = new URLSearchParams(req.url.split('?')[1]);
+      const username = urlParams.get('username');
+      const deviceId = urlParams.get('deviceId');
+    
+      if (!username || !deviceId) {
+        ws.close(1008, 'Missing username or deviceId');
+        return;
+      }
+    
+      const clientKey = `${username}_${deviceId}`;
+      // Đóng kết nối cũ nếu tồn tại
+      const existingClient = clients.get(clientKey);
+      if (existingClient && existingClient.readyState === WebSocket.OPEN) {
+        existingClient.close(1000, 'New connection established');
+        logger.info(`Closed old WebSocket connection for ${clientKey}`);
+      }
+    
+      clients.set(clientKey, ws);
+      logger.info(`WebSocket connected: ${clientKey}`);
+    
+      ws.on('close', () => {
+        clients.delete(clientKey);
+        logger.info(`WebSocket disconnected: ${clientKey}`);
+      });
+    
+      ws.on('error', (error) => {
+        logger.error(`WebSocket error for ${clientKey}:`, error);
+      });
+    });
+
+    // Tải danh sách username ban đầu và định kỳ
+    setInterval(loadUsernames, 5 * 60 * 1000);
+  } catch (error) {
+    logger.error('Server startup failed:', error);
+    process.exit(1);
+  }
+}
+
+// API lấy dữ liệu từ Google Sheets
+app.get('/api/drugs', ensureSheetsClient, async (req, res) => {
+  logger.info('Request received for /api/drugs', { query: req.query });
+  const { query, page: pageRaw = 1, limit: limitRaw = 10 } = req.query;
+
+  const page = isNaN(parseInt(pageRaw)) || parseInt(pageRaw) < 1 ? 1 : parseInt(pageRaw);
+  const limit = isNaN(parseInt(limitRaw)) || parseInt(limitRaw) < 1 ? 10 : parseInt(limitRaw);
+
+  const cacheKey = query ? `drugs_${query}_${page}_${limit}` : 'all_drugs';
+
+  try {
+    // Kiểm tra cache trước
+    let drugs = cache.get(cacheKey);
+    if (!drugs) {
+      console.log('Cache miss - Lấy dữ liệu từ Google Sheets');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+      throw new Error('Request to Google Sheets timed out after 10 seconds');
+    }, 10000);
+
+      const response = await sheetsClient.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'pedmedvnch',
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+    const rows = response.data.values || [];
+    console.log('Dữ liệu thô từ Google Sheets:', rows);
+
+    drugs = rows.slice(1).map(row => ({
+      'Hoạt chất': row[2], // Cột C
+      'Cập nhật': row[3], // Cột D
+      'Phân loại dược lý': row[4], // Cột E
+      'Liều thông thường trẻ sơ sinh': row[5], // Cột F
+      'Liều thông thường trẻ em': row[6], // Cột G
+      'Hiệu chỉnh liều theo chức năng thận': row[7], // Cột H
+      'Hiệu chỉnh liều theo chức năng gan': row[8], // Cột I
+      'Chống chỉ định': row[9], // Cột J
+      'Tác dụng không mong muốn': row[10], // Cột K
+      'Cách dùng (ngoài IV)': row[11], // Cột L
+      'Tương tác thuốc chống chỉ định': row[12], // Cột M
+      'Ngộ độc/Quá liều': row[13], // Cột N
+      'Các thông số cần theo dõi': row[14], // Cột O
+      'Bảo hiểm y tế thanh toán': row[15], // Cột P
+    }));
+
+    // Lưu vào cache
+    cache.set(cacheKey, drugs);
+    console.log('Dữ liệu đã được lưu vào cache');
+  } else {
+    console.log('Cache hit - Lấy dữ liệu từ cache');
+  }
+
+    // Lọc dữ liệu nếu có query
+    if (query) {
+      const filteredDrugs = drugs.filter(drug =>
+        drug['Hoạt chất']?.toLowerCase().includes(query.toLowerCase()));
+        const start = (page - 1) * limit;
+        return res.json({
+          total: filteredDrugs.length,
+          page,
+          data: filteredDrugs.slice(start, start + parseInt(limit))
+        });
+    }
+
+    console.log('Dữ liệu đã ánh xạ:', drugs);
+    res.json(drugs);
+  } catch (error) {
+    clearTimeout(timeout);
+    logger.error('Lỗi khi lấy dữ liệu từ Google Sheets:', error);
+    res.status(500).json({ error: 'Không thể lấy dữ liệu' });
+  }
+});
+
+app.post('/api/drugs/invalidate-cache', ensureSheetsClient, async (req, res) => {
+  cache.del('all_drugs');
+  if (wss) {
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ action: 'cache_invalidated' }));
+    }
+  });
+  }
+  res.json({ success: true, message: 'Cache đã được làm mới' });
+});
+
+// Tạo store để lưu trữ số lần thử cho từng username (dùng bộ nhớ RAM)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 phút
+  max: 5, // 5 lần thử
+  message: { success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" },
+  keyGenerator: (req) => {
+    const username = req.body.username ? req.body.username.trim().toLowerCase() : 'unknown';
+    return username;
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 204 // Trả về 204 cho OPTIONS
-};
-
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Xử lý preflight cho tất cả route
-
-app.use(express.json({ limit: '10kb' })); // Giới hạn 10KB
-
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [new winston.transports.Console()]
+  skipSuccessfulRequests: true, // Chỉ bỏ qua khi đăng nhập thành công
+  handler: (req, res) => {
+    res.status(429).json({ success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" });
+  }
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server đang chạy tại http://0.0.0.0:${PORT}`);
-});
+// API kiểm tra đăng nhập
+app.post('/api/login', loginLimiter, async (req, res, next) => {
+  const { username, password, deviceId, deviceName } = req.body;
+  logger.info('Login request received', { username, deviceId, deviceName });
 
-// Khởi tạo WebSocket server
-const wss = new WebSocket.Server({ server });
-
-// Lưu trữ kết nối WebSocket theo username và deviceId
-const clients = new Map(); // Map<username_deviceId, WebSocket>
-
-wss.on('connection', (ws, req) => {
-  const urlParams = new URLSearchParams(req.url.split('?')[1]);
-  const username = urlParams.get('username');
-  const deviceId = urlParams.get('deviceId');
-
-  if (!username || !deviceId) {
-    ws.close(1008, 'Missing username or deviceId');
-    return;
+  if (!username || !password || !deviceId) {
+    return res.status(400).json({ success: false, message: "Thiếu thông tin đăng nhập!" });
   }
 
-  const clientKey = `${username}_${deviceId}`;
-  // Đóng kết nối cũ nếu tồn tại
-  const existingClient = clients.get(clientKey);
-  if (existingClient && existingClient.readyState === WebSocket.OPEN) {
-    existingClient.close(1000, 'New connection established');
-    logger.info(`Closed old WebSocket connection for ${clientKey}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await sheetsClient.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Accounts',
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    const rows = response.data.values;
+    const headers = rows[0];
+    const usernameIndex = headers.indexOf("Username");
+    const passwordIndex = headers.indexOf("Password");
+    const approvedIndex = headers.indexOf("Approved");
+    const device1IdIndex = headers.indexOf("Device_1_ID");
+    const device1NameIndex = headers.indexOf("Device_1_Name");
+    const device2IdIndex = headers.indexOf("Device_2_ID");
+    const device2NameIndex = headers.indexOf("Device_2_Name");
+
+    if ([usernameIndex, passwordIndex, approvedIndex, device1IdIndex, device1NameIndex, device2IdIndex, device2NameIndex].includes(-1)) {
+      return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
+    }
+
+    const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
+    if (userRowIndex === -1) {
+      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
+    }
+
+    const user = rows[userRowIndex];
+    const isPasswordValid = await bcrypt.compare(password.trim(), user[passwordIndex]?.trim() || '');
+    if (!isPasswordValid) {
+      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
+    }
+
+    if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
+      return res.status(403).json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
+    }
+
+    let currentDevices = [
+      { id: user[device1IdIndex], name: user[device1NameIndex] },
+      { id: user[device2IdIndex], name: user[device2NameIndex] }
+    ].filter(d => d.id);
+
+    if (currentDevices.some(d => d.id === deviceId)) {
+      return res.status(200).json({ success: true, message: "Đăng nhập thành công!" });
+    }
+
+    if (currentDevices.length >= 2) {
+      return res.status(403).json({
+        success: false,
+        message: "Tài khoản đã đăng nhập trên 2 thiết bị. Vui lòng chọn thiết bị cần đăng xuất.",
+        devices: currentDevices.map(d => ({ id: d.id, name: d.name })) // Trả về cả id và name
+      });
+    }
+
+    currentDevices.push({ id: deviceId, name: deviceName });
+    currentDevices = currentDevices.slice(-2);
+
+    const values = [
+      currentDevices[0]?.id || "",
+      currentDevices[0]?.name || "",
+      currentDevices[1]?.id || "",
+      currentDevices[1]?.name || ""
+    ];
+
+    // Tính range động dựa trên chỉ số cột
+    const startCol = String.fromCharCode(65 + device1IdIndex); // Ví dụ: L (11 -> 76)
+    const endCol = String.fromCharCode(65 + device2NameIndex); // Ví dụ: O (14 -> 79)
+    await sheetsClient.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Accounts!${startCol}${userRowIndex + 1}:${endCol}${userRowIndex + 1}`,
+      valueInputOption: "RAW",
+      resource: { values: [values] }
+    });
+
+    return res.status(200).json({ success: true, message: "Đăng nhập thành công và thiết bị đã được lưu!" });
+  } catch (error) {
+    clearTimeout(timeout);
+    logger.error('Lỗi khi kiểm tra tài khoản:', error);
+    next(error);
   }
-
-  clients.set(clientKey, ws);
-  logger.info(`WebSocket connected: ${clientKey}`);
-
-  ws.on('close', () => {
-    clients.delete(clientKey);
-    logger.info(`WebSocket disconnected: ${clientKey}`);
-  });
-
-  ws.on('error', (error) => {
-    logger.error(`WebSocket error for ${clientKey}:`, error);
-  });
 });
-
-// Thay Redis bằng Map để lưu OTP
-const otpStore = new Map(); // Lưu trữ { username: { code, expiry } }
 
 // Hàm đặt OTP với TTL
 const setOtp = (username, otpCode, ttlInSeconds) => {
@@ -153,15 +396,6 @@ const deleteOtp = (username) => {
   otpStore.delete(username);
   logger.info(`OTP for ${username} deleted`);
 };
-
-// ID của Google Sheet
-const SPREADSHEET_ID = '1mDJIil1rmEXEl7tV5qq3j6HkbKe1padbPhlQMiYaq9U';
-
-// Khởi tạo Google Sheets API client
-const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
 
 async function getAccessToken() {
   logger.info("🔄 Đang lấy Access Token...");
@@ -251,211 +485,6 @@ async function sendEmailWithGmailAPI(toEmail, subject, body, retries = 3, delay 
   }
 }
 
-// API lấy dữ liệu từ Google Sheets
-app.get('/api/drugs', async (req, res) => {
-  logger.info('Request received for /api/drugs', { query: req.query });
-  const { query, page: pageRaw = 1, limit: limitRaw = 10 } = req.query;
-
-  const page = isNaN(parseInt(pageRaw)) || parseInt(pageRaw) < 1 ? 1 : parseInt(pageRaw);
-  const limit = isNaN(parseInt(limitRaw)) || parseInt(limitRaw) < 1 ? 10 : parseInt(limitRaw);
-
-  const cacheKey = query ? `drugs_${query}_${page}_${limit}` : 'all_drugs';
-
-  // Kiểm tra xem client đã sẵn sàng chưa
-  if (!sheetsClient) {
-    return res.status(503).json({ error: 'Google Sheets client not available' });
-  }
-
-  try {
-    // Kiểm tra cache trước
-    let drugs = cache.get(cacheKey);
-    if (!drugs) {
-      console.log('Cache miss - Lấy dữ liệu từ Google Sheets');
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      controller.abort();
-      throw new Error('Request to Google Sheets timed out after 10 seconds');
-    }, 10000);
-
-      const response = await sheetsClient.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'pedmedvnch',
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
-
-    const rows = response.data.values || [];
-    console.log('Dữ liệu thô từ Google Sheets:', rows);
-
-    drugs = rows.slice(1).map(row => ({
-      'Hoạt chất': row[2], // Cột C
-      'Cập nhật': row[3], // Cột D
-      'Phân loại dược lý': row[4], // Cột E
-      'Liều thông thường trẻ sơ sinh': row[5], // Cột F
-      'Liều thông thường trẻ em': row[6], // Cột G
-      'Hiệu chỉnh liều theo chức năng thận': row[7], // Cột H
-      'Hiệu chỉnh liều theo chức năng gan': row[8], // Cột I
-      'Chống chỉ định': row[9], // Cột J
-      'Tác dụng không mong muốn': row[10], // Cột K
-      'Cách dùng (ngoài IV)': row[11], // Cột L
-      'Tương tác thuốc chống chỉ định': row[12], // Cột M
-      'Ngộ độc/Quá liều': row[13], // Cột N
-      'Các thông số cần theo dõi': row[14], // Cột O
-      'Bảo hiểm y tế thanh toán': row[15], // Cột P
-    }));
-
-    // Lưu vào cache
-    cache.set(cacheKey, drugs);
-    console.log('Dữ liệu đã được lưu vào cache');
-  } else {
-    console.log('Cache hit - Lấy dữ liệu từ cache');
-  }
-
-    // Lọc dữ liệu nếu có query
-    if (query) {
-      const filteredDrugs = drugs.filter(drug =>
-        drug['Hoạt chất']?.toLowerCase().includes(query.toLowerCase()));
-        const start = (page - 1) * limit;
-        return res.json({
-          total: filteredDrugs.length,
-          page,
-          data: filteredDrugs.slice(start, start + parseInt(limit))
-        });
-    }
-
-    console.log('Dữ liệu đã ánh xạ:', drugs);
-    res.json(drugs);
-  } catch (error) {
-    clearTimeout(timeout);
-    logger.error('Lỗi khi lấy dữ liệu từ Google Sheets:', error);
-    res.status(500).json({ error: 'Không thể lấy dữ liệu' });
-  }
-});
-
-app.post('/api/drugs/invalidate-cache', async (req, res) => {
-  cache.del('all_drugs');
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify({ action: 'cache_invalidated' }));
-    }
-  });
-  res.json({ success: true, message: 'Cache đã được làm mới' });
-});
-
-const rateLimit = require('express-rate-limit');
-
-// Tạo store để lưu trữ số lần thử cho từng username (dùng bộ nhớ RAM)
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 phút
-  max: 5, // 5 lần thử
-  message: { success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" },
-  keyGenerator: (req) => {
-    const username = req.body.username ? req.body.username.trim().toLowerCase() : 'unknown';
-    return username;
-  },
-  skipSuccessfulRequests: true, // Chỉ bỏ qua khi đăng nhập thành công
-  handler: (req, res) => {
-    res.status(429).json({ success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" });
-  }
-});
-
-// API kiểm tra đăng nhập
-app.post('/api/login', loginLimiter, async (req, res, next) => {
-  const { username, password, deviceId, deviceName } = req.body;
-  logger.info('Login request received', { username, deviceId, deviceName });
-
-  if (!username || !password || !deviceId) {
-    return res.status(400).json({ success: false, message: "Thiếu thông tin đăng nhập!" });
-  }
-
-  if (!sheetsClient) {
-    return res.status(503).json({ success: false, message: 'Dịch vụ tạm thời không khả dụng' });
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-  try {
-    const response = await sheetsClient.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Accounts',
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-
-    const rows = response.data.values;
-    const headers = rows[0];
-    const usernameIndex = headers.indexOf("Username");
-    const passwordIndex = headers.indexOf("Password");
-    const approvedIndex = headers.indexOf("Approved");
-    const device1IdIndex = headers.indexOf("Device_1_ID");
-    const device1NameIndex = headers.indexOf("Device_1_Name");
-    const device2IdIndex = headers.indexOf("Device_2_ID");
-    const device2NameIndex = headers.indexOf("Device_2_Name");
-
-    if ([usernameIndex, passwordIndex, approvedIndex, device1IdIndex, device1NameIndex, device2IdIndex, device2NameIndex].includes(-1)) {
-      return res.status(500).json({ success: false, message: "Lỗi cấu trúc Google Sheets!" });
-    }
-
-    const userRowIndex = rows.findIndex(row => row[usernameIndex] === username);
-    if (userRowIndex === -1) {
-      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
-    }
-
-    const user = rows[userRowIndex];
-    const isPasswordValid = await bcrypt.compare(password.trim(), user[passwordIndex]?.trim() || '');
-    if (!isPasswordValid) {
-      return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu chưa đúng!" });
-    }
-
-    if (user[approvedIndex]?.trim().toLowerCase() !== "đã duyệt") {
-      return res.status(403).json({ success: false, message: "Tài khoản chưa được phê duyệt bởi quản trị viên." });
-    }
-
-    let currentDevices = [
-      { id: user[device1IdIndex], name: user[device1NameIndex] },
-      { id: user[device2IdIndex], name: user[device2NameIndex] }
-    ].filter(d => d.id);
-
-    if (currentDevices.some(d => d.id === deviceId)) {
-      return res.status(200).json({ success: true, message: "Đăng nhập thành công!" });
-    }
-
-    if (currentDevices.length >= 2) {
-      return res.status(403).json({
-        success: false,
-        message: "Tài khoản đã đăng nhập trên 2 thiết bị. Vui lòng chọn thiết bị cần đăng xuất.",
-        devices: currentDevices.map(d => ({ id: d.id, name: d.name })) // Trả về cả id và name
-      });
-    }
-
-    currentDevices.push({ id: deviceId, name: deviceName });
-    currentDevices = currentDevices.slice(-2);
-
-    const values = [
-      currentDevices[0]?.id || "",
-      currentDevices[0]?.name || "",
-      currentDevices[1]?.id || "",
-      currentDevices[1]?.name || ""
-    ];
-
-    // Tính range động dựa trên chỉ số cột
-    const startCol = String.fromCharCode(65 + device1IdIndex); // Ví dụ: L (11 -> 76)
-    const endCol = String.fromCharCode(65 + device2NameIndex); // Ví dụ: O (14 -> 79)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `Accounts!${startCol}${userRowIndex + 1}:${endCol}${userRowIndex + 1}`,
-      valueInputOption: "RAW",
-      resource: { values: [values] }
-    });
-
-    return res.status(200).json({ success: true, message: "Đăng nhập thành công và thiết bị đã được lưu!" });
-  } catch (error) {
-    clearTimeout(timeout);
-    logger.error('Lỗi khi kiểm tra tài khoản:', error);
-    next(error);
-  }
-});
-
 //API kiểm tra trạng thái đã duyệt
 app.post('/api/check-session', async (req, res, next) => {
   logger.info('Request received for /api/check-session', { body: req.body });
@@ -464,10 +493,6 @@ app.post('/api/check-session', async (req, res, next) => {
   if (!username || !deviceId) {
     console.log("Lỗi: Không có tên đăng nhập hoặc Device ID");
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản hoặc thiết bị!" });
-  }
-
-  if (!sheetsClient) {
-    return res.status(503).json({ error: 'Service unavailable' });
   }
 
   try {
@@ -535,10 +560,6 @@ app.post('/api/logout-device', async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Thiếu thông tin cần thiết" });
     }
 
-    if (!sheetsClient) {
-      return res.status(503).json({ error: 'Service unavailable' });
-    }
-
     const response = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Accounts',
@@ -574,6 +595,9 @@ app.post('/api/logout-device', async (req, res, next) => {
       if (oldClient && oldClient.readyState === WebSocket.OPEN) {
         oldClient.send(JSON.stringify({ action: 'logout', message: 'Thiết bị của bạn đã bị đăng xuất bởi thiết bị mới!' }));
         logger.info(`Sent logout notification to ${clientKey}`);
+      } else if (oldClient) {
+        clients.delete(clientKey); // Xóa kết nối không còn hoạt động
+        logger.info(`Removed stale WebSocket connection for ${clientKey}`);
       }
     }
 
@@ -605,9 +629,6 @@ app.post('/api/logout-device', async (req, res, next) => {
 
 app.post('/api/logout-device-from-sheet', async (req, res) => {
     const { username, deviceId } = req.body;
-    if (!sheetsClient) {
-      return res.status(503).json({ error: 'Service unavailable' });
-    }
 
     const response = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
@@ -657,42 +678,6 @@ app.post('/api/logout-device-from-sheet', async (req, res) => {
   
     return res.json({ success: true, message: "Thiết bị đã được xóa khỏi danh sách!" });
   });
-  
-//API kiểm tra tên đăng nhập
-let cachedUsernames = [];
-
-async function loadUsernames() {
-    try {
-        const range = 'Accounts';
-        const response = await sheetsClient.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
-            range,
-        });
-
-        if (!response || !response.data || !response.data.values) {
-            console.error("⚠️ Không thể tải danh sách username.");
-            return;
-        }
-
-        const rows = response.data.values;
-        const headers = rows[0] || [];
-        const usernameIndex = headers.indexOf("Username");
-
-        if (usernameIndex === -1) {
-            console.error("⚠️ Không tìm thấy cột Username.");
-            return;
-        }
-
-        cachedUsernames = rows.slice(1).map(row => row[usernameIndex]?.trim().toLowerCase());
-        console.log("✅ Tải danh sách username thành công.");
-    } catch (error) {
-        console.error("❌ Lỗi khi tải danh sách username:", error);
-    }
-}
-
-// Tải danh sách username khi server khởi động
-loadUsernames();
-setInterval(loadUsernames, 5 * 60 * 1000); // Cập nhật mỗi 5 phút
 
 // API kiểm tra username
 app.post('/api/check-username', async (req, res, next) => {
@@ -741,10 +726,6 @@ app.post('/api/register', async (req, res, next) => {
 
   if (!isValidPhone(phone)) {
     return res.status(400).json({ success: false, message: "Số điện thoại không hợp lệ!" });
-  }
-
-  if (!sheetsClient) {
-    return res.status(503).json({ error: 'Service unavailable' });
   }
 
   const controller = new AbortController();
@@ -823,6 +804,7 @@ app.post('/api/register', async (req, res, next) => {
 });
 
 async function sendRegistrationEmail(toEmail, username) {
+  try {
   const emailBody = `
     <h2 style="color: #4CAF50;">Xin chào ${username}!</h2>
     <p>Cảm ơn bạn đã đăng ký tài khoản tại PedMedVN. Tài khoản của bạn đã được tạo thành công và đang chờ phê duyệt từ quản trị viên.</p>
@@ -830,12 +812,13 @@ async function sendRegistrationEmail(toEmail, username) {
     <p>Trân trọng,<br>Đội ngũ PedMedVN</p>
   `;
   await sendEmailWithGmailAPI(toEmail, "ĐĂNG KÝ TÀI KHOẢN PEDMEDVN THÀNH CÔNG", emailBody);
+} catch (error) {
+  logger.error(`Failed to send registration email to ${toEmail}:`, error);
+  // Có thể ghi log hoặc xử lý thêm, nhưng không crash server
+}
 }
 
 app.post('/api/check-approval', async (req, res, next) => {
-  if (!sheetsClient) {
-    return res.status(503).json({ error: 'Service unavailable' });
-  }
 
   try {
     const response = await sheetsClient.spreadsheets.values.get({
@@ -900,10 +883,6 @@ app.post('/api/send-otp', otpLimiter, async (req, res, next) => {
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
   }
 
-  if (!sheetsClient) {
-    return res.status(503).json({ error: 'Service unavailable' });
-  }
-
   try {
     logger.info(`Fetching user data for ${username}`);
     const controller = new AbortController();
@@ -961,10 +940,8 @@ app.post('/api/verify-otp', async (req, res, next) => {
   if (!username || !otp) return res.status(400).json({ success: false, message: "Thiếu thông tin xác minh!" });
 
   try {
-    const savedOtp = getOtp(username);
-    if (!savedOtp) return res.status(400).json({ success: false, message: "OTP không hợp lệ hoặc đã hết hạn!" });
-
-    if (savedOtp !== otp) return res.status(400).json({ success: false, message: "Mã OTP không đúng!" });
+    const isValid = await getOtp(username, otp);
+    if (!isValid) return res.status(400).json({ success: false, message: "OTP không hợp lệ hoặc đã hết hạn!" });
 
     deleteOtp(username);
     return res.json({ success: true, message: "Xác minh thành công, hãy đặt lại mật khẩu mới!" });
@@ -981,10 +958,6 @@ app.post('/api/reset-password', async (req, res, next) => {
 
   if (!username || !newPassword) {
       return res.status(400).json({ success: false, message: "Vui lòng nhập đầy đủ thông tin!" });
-  }
-
-  if (!sheetsClient) {
-    return res.status(503).json({ error: 'Service unavailable' });
   }
 
   const authHeader = req.headers['authorization'];
@@ -1062,6 +1035,9 @@ app.post('/api/reset-password', async (req, res, next) => {
       next(error);
   }
 });
+
+// Gọi hàm khởi động
+startServer();
 
 // Middleware xử lý lỗi
 app.use((err, req, res, next) => {
