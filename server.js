@@ -119,22 +119,9 @@ async function startServer() {
     // Sau khi sheetsClient sẵn sàng, tải danh sách username
     await loadUsernames();
 
-    // Cấu hình CORS và middleware khác
-    const allowedOrigins = process.env.ALLOWED_ORIGINS
-      ? process.env.ALLOWED_ORIGINS.split(',')
-      : ['https://pedmed-vnch.web.app', 'http://localhost:3000'];
-
     app.options('*', cors()); // Xử lý tất cả request OPTIONS
     app.use(cors({
-      //origin: (origin, callback) => {
-      //  console.log('Request Origin:', origin); // Log để kiểm tra
-      //  if (!origin || allowedOrigins.includes(origin)) {
-      //    callback(null, true);
-      //  } else {
-      //    callback(new Error('Not allowed by CORS'));
-      //  }
-      //},
-      origin: '*', // Cho phép tất cả origin
+      origin: '*',
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
       credentials: true,
@@ -686,6 +673,9 @@ app.post('/api/logout-device-from-sheet', async (req, res) => {
 // API kiểm tra username
 app.post('/api/check-username', async (req, res, next) => {
     try {
+      if (!req.body || typeof req.body !== 'object') {
+        return res.status(400).json({ success: false, message: 'Yêu cầu không hợp lệ: Thiếu body hoặc định dạng sai!' });
+      }
         const { username } = req.body;
         if (!username) {
             return res.status(400).json({ exists: false, message: "Thiếu tên đăng nhập!" });
@@ -881,7 +871,9 @@ const otpLimiter = rateLimit({
 //API gửi OTP đến email user
 app.post('/api/send-otp', otpLimiter, async (req, res, next) => {
   logger.info('Request received for /api/send-otp', { body: req.body });
-
+  if (!req.body || typeof req.body !== 'object') {
+    return res.status(400).json({ success: false, message: 'Yêu cầu không hợp lệ: Thiếu body hoặc định dạng sai!' });
+  }
   const { username } = req.body;
   if (!username) {
     return res.status(400).json({ success: false, message: "Thiếu thông tin tài khoản!" });
