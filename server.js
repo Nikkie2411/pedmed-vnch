@@ -86,6 +86,30 @@ async function loadUsernames() {
     }
 }
 
+// Middleware kiểm tra sheetsClient
+const ensureSheetsClient = (req, res, next) => {
+  if (!sheetsClient) {
+    return res.status(503).json({ success: false, message: 'Service unavailable, server not fully initialized' });
+  }
+  next();
+};
+
+// Tạo store để lưu trữ số lần thử cho từng username (dùng bộ nhớ RAM)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 phút
+  max: 5, // 5 lần thử
+  message: { success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" },
+  keyGenerator: (req) => {
+    // Kiểm tra req.body có tồn tại không
+    const username = req.body && req.body.username ? req.body.username.trim().toLowerCase() : 'unknown';
+    return username;
+  },
+  skipSuccessfulRequests: true, // Chỉ bỏ qua khi đăng nhập thành công
+  handler: (req, res) => {
+    res.status(429).json({ success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" });
+  }
+});
+
 // Hàm khởi động server
 async function startServer() {
   try {
@@ -115,6 +139,7 @@ async function startServer() {
       optionsSuccessStatus: 204
     }));
     app.use(express.json({ limit: '10kb' }));
+    app.use(ensureSheetsClient);
 
     // Khởi tạo WebSocket server
     const PORT = process.env.PORT || 3000;
@@ -153,127 +178,7 @@ async function startServer() {
       });
     });
 
-    // Tải danh sách username ban đầu và định kỳ
-    setInterval(loadUsernames, 5 * 60 * 1000);
-  } catch (error) {
-    logger.error('Server startup failed:', error);
-    process.exit(1);
-  }
-}
-
-// Middleware kiểm tra sheetsClient
-const ensureSheetsClient = (req, res, next) => {
-  if (!sheetsClient) {
-    return res.status(503).json({ success: false, message: 'Service unavailable, server not fully initialized' });
-  }
-  next();
-};
-app.use(ensureSheetsClient);
-
-// API lấy dữ liệu từ Google Sheets
-app.get('/api/drugs', ensureSheetsClient, async (req, res) => {
-  logger.info('Request received for /api/drugs', { query: req.query });
-  const { query, page: pageRaw = 1, limit: limitRaw = 10 } = req.query;
-
-  const page = isNaN(parseInt(pageRaw)) || parseInt(pageRaw) < 1 ? 1 : parseInt(pageRaw);
-  const limit = isNaN(parseInt(limitRaw)) || parseInt(limitRaw) < 1 ? 10 : parseInt(limitRaw);
-
-  const cacheKey = query ? `drugs_${query}_${page}_${limit}` : 'all_drugs';
-
-  try {
-    // Kiểm tra cache trước
-    let drugs = cache.get(cacheKey);
-    if (!drugs) {
-      console.log('Cache miss - Lấy dữ liệu từ Google Sheets');
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      controller.abort();
-      throw new Error('Request to Google Sheets timed out after 10 seconds');
-    }, 10000);
-
-      const response = await sheetsClient.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'pedmedvnch',
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
-
-    const rows = response.data.values || [];
-    console.log('Dữ liệu thô từ Google Sheets:', rows);
-
-    drugs = rows.slice(1).map(row => ({
-      'Hoạt chất': row[2], // Cột C
-      'Cập nhật': row[3], // Cột D
-      'Phân loại dược lý': row[4], // Cột E
-      'Liều thông thường trẻ sơ sinh': row[5], // Cột F
-      'Liều thông thường trẻ em': row[6], // Cột G
-      'Hiệu chỉnh liều theo chức năng thận': row[7], // Cột H
-      'Hiệu chỉnh liều theo chức năng gan': row[8], // Cột I
-      'Chống chỉ định': row[9], // Cột J
-      'Tác dụng không mong muốn': row[10], // Cột K
-      'Cách dùng (ngoài IV)': row[11], // Cột L
-      'Tương tác thuốc chống chỉ định': row[12], // Cột M
-      'Ngộ độc/Quá liều': row[13], // Cột N
-      'Các thông số cần theo dõi': row[14], // Cột O
-      'Bảo hiểm y tế thanh toán': row[15], // Cột P
-    }));
-
-    // Lưu vào cache
-    cache.set(cacheKey, drugs);
-    console.log('Dữ liệu đã được lưu vào cache');
-  } else {
-    console.log('Cache hit - Lấy dữ liệu từ cache');
-  }
-
-    // Lọc dữ liệu nếu có query
-    if (query) {
-      const filteredDrugs = drugs.filter(drug =>
-        drug['Hoạt chất']?.toLowerCase().includes(query.toLowerCase()));
-        const start = (page - 1) * limit;
-        return res.json({
-          total: filteredDrugs.length,
-          page,
-          data: filteredDrugs.slice(start, start + parseInt(limit))
-        });
-    }
-
-    console.log('Dữ liệu đã ánh xạ:', drugs);
-    res.json(drugs);
-  } catch (error) {
-    clearTimeout(timeout);
-    logger.error('Lỗi khi lấy dữ liệu từ Google Sheets:', error);
-    res.status(500).json({ error: 'Không thể lấy dữ liệu' });
-  }
-});
-
-app.post('/api/drugs/invalidate-cache', ensureSheetsClient, async (req, res) => {
-  cache.del('all_drugs');
-  if (wss) {
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify({ action: 'cache_invalidated' }));
-    }
-  });
-  }
-  res.json({ success: true, message: 'Cache đã được làm mới' });
-});
-
-// Tạo store để lưu trữ số lần thử cho từng username (dùng bộ nhớ RAM)
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 phút
-  max: 5, // 5 lần thử
-  message: { success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" },
-  keyGenerator: (req) => {
-    const username = req.body.username ? req.body.username.trim().toLowerCase() : 'unknown';
-    return username;
-  },
-  skipSuccessfulRequests: true, // Chỉ bỏ qua khi đăng nhập thành công
-  handler: (req, res) => {
-    res.status(429).json({ success: false, message: "Quá nhiều lần thử đăng nhập với tài khoản này. Vui lòng thử lại sau 15 phút!" });
-  }
-});
-
-// API kiểm tra đăng nhập
+    // API kiểm tra đăng nhập
 app.post('/api/login', loginLimiter, async (req, res, next) => {
   const { username, password, deviceId, deviceName } = req.body;
   logger.info('Login request received', { username, deviceId, deviceName });
@@ -364,6 +269,102 @@ app.post('/api/login', loginLimiter, async (req, res, next) => {
     logger.error('Lỗi khi kiểm tra tài khoản:', error);
     next(error);
   }
+});
+
+// API lấy dữ liệu từ Google Sheets
+app.get('/api/drugs', ensureSheetsClient, async (req, res) => {
+  logger.info('Request received for /api/drugs', { query: req.query });
+  const { query, page: pageRaw = 1, limit: limitRaw = 10 } = req.query;
+
+  const page = isNaN(parseInt(pageRaw)) || parseInt(pageRaw) < 1 ? 1 : parseInt(pageRaw);
+  const limit = isNaN(parseInt(limitRaw)) || parseInt(limitRaw) < 1 ? 10 : parseInt(limitRaw);
+
+  const cacheKey = query ? `drugs_${query}_${page}_${limit}` : 'all_drugs';
+
+  try {
+    // Kiểm tra cache trước
+    let drugs = cache.get(cacheKey);
+    if (!drugs) {
+      console.log('Cache miss - Lấy dữ liệu từ Google Sheets');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+      throw new Error('Request to Google Sheets timed out after 10 seconds');
+    }, 10000);
+
+      const response = await sheetsClient.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'pedmedvnch',
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+    const rows = response.data.values || [];
+    console.log('Dữ liệu thô từ Google Sheets:', rows);
+
+    drugs = rows.slice(1).map(row => ({
+      'Hoạt chất': row[2], // Cột C
+      'Cập nhật': row[3], // Cột D
+      'Phân loại dược lý': row[4], // Cột E
+      'Liều thông thường trẻ sơ sinh': row[5], // Cột F
+      'Liều thông thường trẻ em': row[6], // Cột G
+      'Hiệu chỉnh liều theo chức năng thận': row[7], // Cột H
+      'Hiệu chỉnh liều theo chức năng gan': row[8], // Cột I
+      'Chống chỉ định': row[9], // Cột J
+      'Tác dụng không mong muốn': row[10], // Cột K
+      'Cách dùng (ngoài IV)': row[11], // Cột L
+      'Tương tác thuốc chống chỉ định': row[12], // Cột M
+      'Ngộ độc/Quá liều': row[13], // Cột N
+      'Các thông số cần theo dõi': row[14], // Cột O
+      'Bảo hiểm y tế thanh toán': row[15], // Cột P
+    }));
+
+    // Lưu vào cache
+    cache.set(cacheKey, drugs);
+    console.log('Dữ liệu đã được lưu vào cache');
+  } else {
+    console.log('Cache hit - Lấy dữ liệu từ cache');
+  }
+
+    // Lọc dữ liệu nếu có query
+    if (query) {
+      const filteredDrugs = drugs.filter(drug =>
+        drug['Hoạt chất']?.toLowerCase().includes(query.toLowerCase()));
+        const start = (page - 1) * limit;
+        return res.json({
+          total: filteredDrugs.length,
+          page,
+          data: filteredDrugs.slice(start, start + parseInt(limit))
+        });
+    }
+
+    console.log('Dữ liệu đã ánh xạ:', drugs);
+    res.json(drugs);
+  } catch (error) {
+    clearTimeout(timeout);
+    logger.error('Lỗi khi lấy dữ liệu từ Google Sheets:', error);
+    res.status(500).json({ error: 'Không thể lấy dữ liệu' });
+  }
+});
+
+    // Tải danh sách username ban đầu và định kỳ
+    setInterval(loadUsernames, 5 * 60 * 1000);
+  } catch (error) {
+    logger.error('Server startup failed:', error);
+    process.exit(1);
+  }
+}
+
+app.post('/api/drugs/invalidate-cache', ensureSheetsClient, async (req, res) => {
+  cache.del('all_drugs');
+  if (wss) {
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ action: 'cache_invalidated' }));
+    }
+  });
+  }
+  res.json({ success: true, message: 'Cache đã được làm mới' });
 });
 
 // Hàm đặt OTP với TTL
