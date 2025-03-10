@@ -29,15 +29,6 @@ const clients = new Map(); // Map<username_deviceId, WebSocket>
 let cachedUsernames = [];
 const otpStore = new Map(); // Lưu trữ { username: { code, expiry } }
 
-// Middleware kiểm tra sheetsClient
-const ensureSheetsClient = (req, res, next) => {
-  if (!sheetsClient) {
-    return res.status(503).json({ success: false, message: 'Service unavailable, server not fully initialized' });
-  }
-  next();
-};
-app.use(ensureSheetsClient);
-
 // Hàm khởi tạo Google Sheets client
 async function initializeSheetsClient(retries = 3, delay = 5000) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -111,6 +102,7 @@ async function startServer() {
 
     app.use(cors({
       origin: (origin, callback) => {
+        console.log('Request Origin:', origin); // Log để kiểm tra
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
@@ -168,6 +160,15 @@ async function startServer() {
     process.exit(1);
   }
 }
+
+// Middleware kiểm tra sheetsClient
+const ensureSheetsClient = (req, res, next) => {
+  if (!sheetsClient) {
+    return res.status(503).json({ success: false, message: 'Service unavailable, server not fully initialized' });
+  }
+  next();
+};
+app.use(ensureSheetsClient);
 
 // API lấy dữ liệu từ Google Sheets
 app.get('/api/drugs', ensureSheetsClient, async (req, res) => {
